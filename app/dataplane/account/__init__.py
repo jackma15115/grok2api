@@ -258,7 +258,7 @@ class AccountDirectory:
                 if strategy == "random":
                     fb.apply_success_random(table, idx)
                 else:
-                    fb.apply_success_quota(table, idx, mode_id)
+                    fb.apply_success_quota(table, idx, mode_id, now_s_val=ts)
 
             elif kind == FeedbackKind.RATE_LIMITED:
                 if strategy == "random":

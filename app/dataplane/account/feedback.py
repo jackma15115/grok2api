@@ -29,10 +29,17 @@ _MAX_HEALTH = 1.0
 # ---------------------------------------------------------------------------
 
 
-def apply_success_quota(table: AccountRuntimeTable, idx: int, mode_id: int) -> None:
+def apply_success_quota(
+    table: AccountRuntimeTable, idx: int, mode_id: int, *, now_s_val: int | None = None
+) -> None:
     """Quota strategy: decrement per-mode quota and improve health."""
     quota_col = table._quota_col(mode_id)
+    reset_col = table._reset_col(mode_id)
+    window_col = table._window_col(mode_id)
     quota_col[idx] = max(0, int(quota_col[idx]) - 1)
+    if int(reset_col[idx]) == 0 and int(window_col[idx]) > 0:
+        ts = now_s_val if now_s_val is not None else now_s()
+        reset_col[idx] = ts + int(window_col[idx])
     _bump_health(table, idx)
 
 

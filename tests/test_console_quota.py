@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+from app.control.account.enums import FeedbackKind
 from app.control.account.backends.local import LocalAccountRepository
 from app.control.account.commands import AccountPatch, AccountUpsert
 from app.control.account.enums import QuotaSource
@@ -14,6 +15,9 @@ from app.control.account.quota_defaults import (
     supports_mode,
 )
 from app.control.account.refresh import AccountRefreshService
+from app.dataplane.account import AccountDirectory
+from app.dataplane.account.selector import set_strategy
+from app.dataplane.shared.enums import ModeId, PoolId
 from app.platform.errors import UpstreamError
 from app.platform.startup.migration import _backfill_console_quota
 
@@ -143,6 +147,77 @@ def test_console_backfill_repairs_persisted_zero_quota():
     asyncio.run(run())
 
 
+def test_console_runtime_window_resets_after_local_exhaustion():
+    async def run():
+        set_strategy("quota")
+        repo = _RuntimeRepo([
+            AccountRecord(
+                token="token-a",
+                pool="basic",
+                quota={"console": QuotaWindow(
+                    remaining=1,
+                    total=30,
+                    window_seconds=900,
+                    reset_at=None,
+                    synced_at=None,
+                    source=QuotaSource.DEFAULT,
+                ).to_dict()},
+            )
+        ])
+        directory = AccountDirectory(repo)
+        await directory.bootstrap()
+
+        lease = await directory.reserve(
+            int(PoolId.BASIC), int(ModeId.CONSOLE), now_s_override=100
+        )
+        assert lease is not None
+        await directory.release(lease)
+        await directory.feedback(
+            lease.token, FeedbackKind.SUCCESS, int(ModeId.CONSOLE), now_s_val=100
+        )
+
+        assert await directory.reserve(
+            int(PoolId.BASIC), int(ModeId.CONSOLE), now_s_override=999
+        ) is None
+
+        lease = await directory.reserve(
+            int(PoolId.BASIC), int(ModeId.CONSOLE), now_s_override=1000
+        )
+        assert lease is not None
+        await directory.release(lease)
+
+    asyncio.run(run())
+
+
+def test_console_runtime_repairs_legacy_zero_without_reset():
+    async def run():
+        set_strategy("quota")
+        repo = _RuntimeRepo([
+            AccountRecord(
+                token="token-a",
+                pool="basic",
+                quota={"console": QuotaWindow(
+                    remaining=0,
+                    total=30,
+                    window_seconds=900,
+                    reset_at=None,
+                    synced_at=None,
+                    source=QuotaSource.ESTIMATED,
+                ).to_dict()},
+            )
+        ])
+        directory = AccountDirectory(repo)
+        await directory.bootstrap()
+
+        lease = await directory.reserve(
+            int(PoolId.BASIC), int(ModeId.CONSOLE), now_s_override=100
+        )
+        assert lease is not None
+        await directory.release(lease)
+
+    asyncio.run(run())
+
+
 class _MemoryRepo:
     def __init__(self, record: AccountRecord) -> None:
         self.record = record
@@ -168,3 +243,11 @@ class _MemoryRepo:
             }
         )
         return None
+
+
+class _RuntimeRepo:
+    def __init__(self, records):
+        self._records = records
+
+    async def runtime_snapshot(self):
+        return SimpleNamespace(items=self._records, revision=1)

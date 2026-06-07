@@ -18,7 +18,7 @@ import random
 from typing import Literal
 
 from app.platform.config.snapshot import get_config
-from ..shared.enums import PoolId
+from ..shared.enums import ModeId, PoolId
 from .table import AccountRuntimeTable
 
 # Scoring weights used by the quota strategy.
@@ -196,18 +196,34 @@ def _maybe_reset_windows(
     if pool_id != int(PoolId.BASIC):
         return
 
-    for idx in list(candidates):
+    scan_idxs = (
+        range(table.size)
+        if pool_id == int(PoolId.BASIC)
+        else list(candidates)
+    )
+    bucket = table.mode_available.setdefault((pool_id, mode_id), set())
+    for idx in scan_idxs:
         r = reset_col[idx]
-        if r == 0 or now_s < r:
-            continue
         if int(table.pool_by_idx[idx]) != pool_id:
             continue
         new_total = int(total_col[idx])
         window_s  = int(window_col[idx])
         if new_total <= 0 or window_s <= 0:
             continue
+        if r == 0:
+            if int(quota_col[idx]) <= 0 and mode_id == int(ModeId.CONSOLE):
+                quota_col[idx] = new_total
+                reset_col[idx] = now_s + window_s
+                bucket.add(idx)
+            elif int(quota_col[idx]) > 0:
+                reset_col[idx] = now_s + window_s
+                bucket.add(idx)
+            continue
+        if now_s < r:
+            continue
         quota_col[idx] = new_total
         reset_col[idx] = now_s + window_s
+        bucket.add(idx)
 
 
 def _best(
