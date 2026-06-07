@@ -293,9 +293,9 @@ async def _normalize_basic_fast_only_quota(repo: "AccountRepository") -> None:
 
 
 async def _backfill_console_quota(repo: "AccountRepository") -> None:
-    """Backfill quota_console for all accounts that don't have it yet."""
+    """Backfill or repair quota_console for accounts that should have it."""
     from app.control.account.commands import AccountPatch, ListAccountsQuery
-    from app.control.account.quota_defaults import default_quota_window
+    from app.control.account.quota_defaults import normalize_quota_window
 
     patches: list[AccountPatch] = []
     page = 1
@@ -304,10 +304,13 @@ async def _backfill_console_quota(repo: "AccountRepository") -> None:
             ListAccountsQuery(page=page, page_size=_BATCH, include_deleted=False)
         )
         for record in result.items:
-            if record.quota_set().console is not None:
-                continue
-            window = default_quota_window(record.pool, 5)
+            window = normalize_quota_window(record.pool, 5, record.quota_set().console)
             if window is None:
+                continue
+            if (
+                record.quota_set().console is not None
+                and window.to_dict() == record.quota_set().console.to_dict()
+            ):
                 continue
             patches.append(AccountPatch(token=record.token, quota_console=window.to_dict()))
         if page >= result.total_pages:

@@ -87,7 +87,10 @@ class AccountRefreshService:
         try:
             from app.dataplane.reverse.protocol.xai_usage import fetch_all_quotas
 
-            return await fetch_all_quotas(token, supported_mode_ids(pool))
+            remote_modes = tuple(
+                mode_id for mode_id in supported_mode_ids(pool) if mode_id != 5
+            )
+            return await fetch_all_quotas(token, remote_modes)
         except UpstreamError:
             raise
         except Exception as exc:
@@ -158,6 +161,8 @@ class AccountRefreshService:
         # mode_id=5 (CONSOLE) 是本地管理的配额，不需要请求 xai usage API
         # 直接做本地扣减并更新 usage_use_count
         if mode_id == 5:
+            if not supports_mode(record.pool, mode_id):
+                return
             await self._apply_single_mode(
                 record, mode_id, window=None, is_use=True, use_at_ms=now_ms()
             )
@@ -473,7 +478,7 @@ class AccountRefreshService:
                 return
             quota_patch[mode_key] = normalized.to_dict()
         else:
-            existing = qs.get(mode_id)
+            existing = normalize_quota_window(record.pool, mode_id, qs.get(mode_id))
             if existing is not None:
                 now = now_ms()
                 # 如果窗口已过期，重置为默认值（适用于本地管理的配额，如 console）

@@ -13,6 +13,8 @@ accounts; basic accounts no longer expose auto/expert windows locally.
 
 from typing import TYPE_CHECKING
 
+from app.platform.runtime.clock import now_ms
+
 from .enums import QuotaSource
 from .models import AccountQuotaSet, QuotaWindow
 
@@ -77,8 +79,8 @@ _POOL_DEFAULTS: dict[str, AccountQuotaSet] = {
 
 _SUPPORTED_MODE_IDS_BY_POOL: dict[str, frozenset[int]] = {
     "basic": frozenset((1, 5)),
-    "super": frozenset((0, 1, 2, 4, 5)),
-    "heavy": frozenset((0, 1, 2, 3, 4, 5)),
+    "super": frozenset((0, 1, 2, 4)),
+    "heavy": frozenset((0, 1, 2, 3, 4)),
 }
 
 # ---------------------------------------------------------------------------
@@ -141,6 +143,25 @@ def normalize_quota_window(
     """Apply product-level quota policy for one pool/mode window."""
     if window is None or not supports_mode(pool, mode_id):
         return None
+    if mode_id == 5:
+        default = default_quota_set(pool).get(mode_id)
+        if default is None:
+            return None
+        if (
+            window.total <= 0
+            or window.window_seconds <= 0
+            or (window.remaining <= 0 and window.reset_at is None)
+            or window.is_window_expired(now_ms())
+        ):
+            return default
+        return QuotaWindow(
+            remaining=max(0, min(int(window.remaining), default.total)),
+            total=default.total,
+            window_seconds=default.window_seconds,
+            reset_at=window.reset_at,
+            synced_at=window.synced_at,
+            source=window.source,
+        )
     if pool == "basic" and mode_id == 1:
         return QuotaWindow(
             remaining=max(0, min(int(window.remaining), BASIC_FAST_LIMIT)),
