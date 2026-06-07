@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import orjson
 
 from app.dataplane.reverse.protocol import xai_console_chat
+from app.dataplane.reverse.protocol.tool_parser import parse_tool_calls
 from app.products.anthropic import console_messages
 from app.products.openai import console_chat, console_responses
 
@@ -39,6 +40,15 @@ TOOL_XML = (
     "<tool_call>"
     "<tool_name>lookup</tool_name>"
     '<parameters>{"query":"weather"}</parameters>'
+    "</tool_call>"
+    "</tool_calls>"
+)
+
+TOOL_XML_ALT = (
+    "<tool_calls>"
+    "<tool_call>"
+    "<tool>lookup</tool>"
+    '<tool_input>{"query":"weather"}</tool_input>'
     "</tool_call>"
     "</tool_calls>"
 )
@@ -220,6 +230,14 @@ def test_chat_non_stream_returns_tool_calls_when_enabled(monkeypatch):
     tool_call = result["choices"][0]["message"]["tool_calls"][0]
     assert tool_call["function"]["name"] == "lookup"
     assert orjson.loads(tool_call["function"]["arguments"]) == {"query": "weather"}
+
+
+def test_tool_parser_accepts_console_xml_variants():
+    result = parse_tool_calls(TOOL_XML_ALT, ["lookup"])
+
+    assert len(result.calls) == 1
+    assert result.calls[0].name == "lookup"
+    assert orjson.loads(result.calls[0].arguments) == {"query": "weather"}
 
 
 def test_chat_stream_buffers_split_tool_xml_and_emits_no_text_finish(monkeypatch):

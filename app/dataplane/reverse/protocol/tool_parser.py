@@ -107,8 +107,8 @@ def _has_tool_syntax(text: str) -> bool:
 
 _XML_ROOT_RE    = re.compile(r"<tool_calls\s*>(.*?)</tool_calls\s*>", re.DOTALL | re.IGNORECASE)
 _XML_CALL_RE    = re.compile(r"<tool_call\s*>(.*?)</tool_call\s*>",   re.DOTALL | re.IGNORECASE)
-_XML_NAME_RE    = re.compile(r"<tool_name\s*>(.*?)</tool_name\s*>",   re.DOTALL | re.IGNORECASE)
-_XML_PARAMS_RE  = re.compile(r"<parameters\s*>(.*?)</parameters\s*>", re.DOTALL | re.IGNORECASE)
+_XML_NAME_RE    = re.compile(r"<(?:tool_name|tool|name)\s*>(.*?)</(?:tool_name|tool|name)\s*>",   re.DOTALL | re.IGNORECASE)
+_XML_PARAMS_RE  = re.compile(r"<(?:parameters|arguments|args|tool_input|input)\s*>(.*?)</(?:parameters|arguments|args|tool_input|input)\s*>", re.DOTALL | re.IGNORECASE)
 
 
 def _parse_xml_tool_calls(text: str) -> list[ParsedToolCall]:
@@ -193,8 +193,21 @@ def _extract_from_call_list(items: list[Any]) -> list[ParsedToolCall]:
     for item in items:
         if not isinstance(item, dict):
             continue
-        name = (item.get("name") or item.get("tool_name") or "").strip()
-        args = item.get("input") or item.get("arguments") or item.get("parameters") or {}
+        func = item.get("function") if isinstance(item.get("function"), dict) else {}
+        name = (
+            item.get("name")
+            or item.get("tool_name")
+            or item.get("tool")
+            or func.get("name")
+            or ""
+        ).strip()
+        args = (
+            item.get("input")
+            or item.get("arguments")
+            or item.get("parameters")
+            or func.get("arguments")
+            or {}
+        )
         if not name:
             continue
         calls.append(ParsedToolCall.make(name, args))

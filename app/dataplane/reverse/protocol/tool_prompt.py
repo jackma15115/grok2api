@@ -24,6 +24,9 @@ TOOL CALL FORMAT — follow these rules exactly:
 - Place multiple tool calls inside ONE <tool_calls> element.
 - Do NOT use markdown code fences around the XML.
 - Do NOT output any inner monologue or explanation alongside the XML.
+- Do NOT try to execute tools yourself. Output the tool request and then stop.
+- After a tool result is provided in the conversation, use that result to answer;
+  do NOT request the same tool again unless new information is needed.
 
 <tool_calls>
   <tool_call>
@@ -42,7 +45,7 @@ I'll call the search tool now. <tool_calls>...</tool_calls>
 NOTE: Even if you believe you cannot fulfill the request, you must still follow the WHEN TO CALL rule above.\
 """
 
-_CHOICE_AUTO     = "WHEN TO CALL: Call a tool when it is clearly needed. Otherwise respond in plain text."
+_CHOICE_AUTO     = "WHEN TO CALL: If the user request needs information or action from an available tool, output a <tool_calls> XML block and stop. Otherwise respond in plain text."
 _CHOICE_NONE     = "WHEN TO CALL: Do NOT call any tools. Respond in plain text only."
 _CHOICE_REQUIRED = "WHEN TO CALL: You MUST output a <tool_calls> XML block. Do NOT write any plain-text reply. If you are uncertain, still call the most relevant tool with your best guess at the parameters."
 _CHOICE_FORCED   = "WHEN TO CALL: You MUST output a <tool_calls> XML block calling the tool named \"{name}\". Do NOT write any plain-text reply under any circumstances."

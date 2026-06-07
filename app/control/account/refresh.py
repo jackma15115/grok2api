@@ -402,8 +402,10 @@ class AccountRefreshService:
                 ):
                     now = now_ms()
                     quota_patch: dict[str, dict] = {}
-                    window = record.quota_set().get(mode_id)
-                    if window is not None:
+                    window = normalize_quota_window(
+                        record.pool, mode_id, record.quota_set().get(mode_id)
+                    )
+                    if window is not None and mode_id != 5:
                         reset_at = (
                             window.reset_at
                             if window.reset_at is not None and window.reset_at > now

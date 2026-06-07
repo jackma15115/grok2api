@@ -14,6 +14,7 @@ from app.control.account.quota_defaults import (
     supports_mode,
 )
 from app.control.account.refresh import AccountRefreshService
+from app.platform.errors import UpstreamError
 from app.platform.startup.migration import _backfill_console_quota
 
 
@@ -69,6 +70,27 @@ def test_console_local_use_repairs_broken_quota_then_decrements():
         assert console.total == 30
         assert console.window_seconds == 900
         assert repo.record.usage_use_count == 1
+
+    asyncio.run(run())
+
+
+def test_console_rate_limit_failure_does_not_zero_persisted_quota():
+    async def run():
+        window = default_quota_window("basic", 5)
+        record = AccountRecord(
+            token="token-a",
+            pool="basic",
+            quota={"console": window.to_dict()},
+        )
+        repo = _MemoryRepo(record)
+        svc = AccountRefreshService(repo)
+
+        await svc.record_failure_async("token-a", 5, UpstreamError("limited", status=429))
+
+        console = repo.record.quota_set().console
+        assert console == window
+        assert repo.record.usage_fail_count == 1
+        assert repo.record.last_fail_reason == "rate_limited"
 
     asyncio.run(run())
 
@@ -140,6 +162,9 @@ class _MemoryRepo:
                 "quota": quota,
                 "usage_use_count": self.record.usage_use_count
                 + (patch.usage_use_delta or 0),
+                "usage_fail_count": self.record.usage_fail_count
+                + (patch.usage_fail_delta or 0),
+                "last_fail_reason": patch.last_fail_reason or self.record.last_fail_reason,
             }
         )
         return None

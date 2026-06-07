@@ -18,7 +18,7 @@ from .lease import AccountLease, new_lease
 from .selector import current_strategy, select, select_any
 from .sync import bootstrap as _bootstrap, apply_changes
 from . import feedback as fb
-from ..shared.enums import POOL_ID_TO_STR, StatusId
+from ..shared.enums import ModeId, POOL_ID_TO_STR, StatusId
 
 if TYPE_CHECKING:
     pass
@@ -265,6 +265,8 @@ class AccountDirectory:
                     pool_id = int(table.pool_by_idx[idx])
                     cooling_sec = _pool_cooling_sec(pool_id)
                     fb.apply_rate_limited_random(table, idx, cooling_sec=cooling_sec)
+                elif mode_id == int(ModeId.CONSOLE):
+                    fb.apply_server_error(table, idx)
                 else:
                     fb.apply_rate_limited_quota(table, idx, mode_id)
                 fb.update_last_fail(table, idx, ts)
