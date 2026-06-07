@@ -1,0 +1,77 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: sync-upstream-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: https://github.com/jiujiu532/grok2api.git
+  TARGET_BRANCH: main
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    if: github.repository != 'jiujiu532/grok2api'
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "${UPSTREAM_REPO}"
+          git fetch upstream "+refs/heads/${TARGET_BRANCH}:refs/remotes/upstream/${TARGET_BRANCH}" --tags --prune
+
+      - name: Merge upstream branch
+        run: |
+          if git merge-base --is-ancestor "upstream/${TARGET_BRANCH}" "HEAD"; then
+            echo "Already up to date with upstream/${TARGET_BRANCH}."
+            exit 0
+          fi
+
+          git merge --no-edit "upstream/${TARGET_BRANCH}"
+          git push origin "HEAD:${TARGET_BRANCH}"
+          gh workflow run docker.yml --ref "${TARGET_BRANCH}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync upstream tags
+        run: |
+          set -euo pipefail
+
+          mapfile -t upstream_tags < <(git ls-remote --tags --refs upstream | awk '{print $2}' | sed 's#refs/tags/##')
+          if [ "${#upstream_tags[@]}" -eq 0 ]; then
+            echo "No upstream tags found."
+            exit 0
+          fi
+
+          for tag in "${upstream_tags[@]}"; do
+            if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+              echo "Tag ${tag} already exists on origin."
+              continue
+            fi
+
+            echo "Syncing upstream tag ${tag}."
+            git push origin "refs/tags/${tag}"
+            gh workflow run docker.yml --ref "${tag}"
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

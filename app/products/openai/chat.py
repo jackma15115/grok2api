@@ -485,6 +485,8 @@ async def completions(
             messages=messages,
             stream=is_stream,
             emit_think=emit_think,
+            tools=tools,
+            tool_choice=tool_choice,
             temperature=temperature,
             top_p=top_p,
         )

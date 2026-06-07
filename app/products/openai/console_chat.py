@@ -19,7 +19,7 @@ from app.platform.logging.logger import logger
 from app.platform.config.snapshot import get_config
 from app.platform.errors import RateLimitError, UpstreamError
 from app.platform.runtime.clock import now_s
-from app.platform.tokens import estimate_prompt_tokens, estimate_tokens
+from app.platform.tokens import estimate_prompt_tokens, estimate_tokens, estimate_tool_call_tokens
 from app.control.account.enums import FeedbackKind
 from app.control.account.invalid_credentials import feedback_kind_for_error
 from app.control.account.runtime import get_refresh_service
@@ -32,11 +32,19 @@ from app.dataplane.reverse.protocol.xai_console_chat import (
 )
 from app.products._account_selection import reserve_account, selection_max_retries
 from app.products.openai.chat import _configured_retry_codes, _should_retry_upstream
+from app.products.openai._tool_sieve import ToolSieve
+from app.dataplane.reverse.protocol.tool_parser import parse_tool_calls
+from app.dataplane.reverse.protocol.tool_prompt import (
+    build_tool_system_prompt,
+    extract_tool_names,
+)
 from ._format import (
     make_response_id,
     make_stream_chunk,
-    make_thinking_chunk,
     make_chat_response,
+    make_tool_call_chunk,
+    make_tool_call_done_chunk,
+    make_tool_call_response,
     build_usage,
 )
 
@@ -92,6 +100,8 @@ async def completions(
     messages: list[dict],
     stream: bool = True,
     emit_think: bool | None = None,
+    tools: list[dict] | None = None,
+    tool_choice: Any = None,
     temperature: float = 0.7,
     top_p: float = 0.95,
 ) -> dict | AsyncGenerator[str, None]:
@@ -106,10 +116,26 @@ async def completions(
     max_retries = selection_max_retries()
     retry_codes = _configured_retry_codes(cfg)
     response_id = make_response_id()
+    tool_names: list[str] = []
+    upstream_messages = messages
+    console_tool_call = bool(tools) and cfg.get_bool("features.console_tool_call", False)
+    inject_native_tools = (
+        not console_tool_call
+        or cfg.get_bool("features.console_native_tools", True)
+    )
+
+    if console_tool_call and tools:
+        tool_names = extract_tool_names(tools)
+        if tool_names:
+            tool_prompt = build_tool_system_prompt(tools, tool_choice)
+            upstream_messages = [
+                {"role": "system", "content": tool_prompt},
+                *messages,
+            ]
 
     logger.info(
-        "console chat request: model={} stream={} messages={}",
-        model, stream, len(messages),
+        "console chat request: model={} stream={} messages={} tool_call={}",
+        model, stream, len(messages), bool(tool_names),
     )
 
     from app.dataplane.account import _directory as _acct_dir
@@ -139,28 +165,80 @@ async def completions(
 
                 try:
                     payload = build_console_payload(
-                        messages=messages,
+                        messages=upstream_messages,
                         model=model,
                         temperature=temperature,
                         top_p=top_p,
                         reasoning_effort=effort,
                         stream=True,
+                        inject_native_tools=inject_native_tools,
                     )
 
                     try:
+                        sieve = ToolSieve(tool_names) if tool_names else None
+                        tool_calls_emitted = False
                         async for event_type, data in stream_console_chat(
                             token, payload, timeout_s=timeout_s
                         ):
                             tokens = adapter.feed(event_type, data)
                             for tok in tokens:
-                                chunk = make_stream_chunk(response_id, model, tok)
-                                yield f"data: {orjson.dumps(chunk).decode()}\n\n"
+                                if sieve is not None:
+                                    safe_text, calls = sieve.feed(tok)
+                                    if safe_text:
+                                        chunk = make_stream_chunk(response_id, model, safe_text)
+                                        yield f"data: {orjson.dumps(chunk).decode()}\n\n"
+                                    if calls is not None:
+                                        for i, tc in enumerate(calls):
+                                            chunk = make_tool_call_chunk(
+                                                response_id, model, i,
+                                                tc.call_id, tc.name, tc.arguments,
+                                                is_first=True,
+                                            )
+                                            yield f"data: {orjson.dumps(chunk).decode()}\n\n"
+                                        done_chunk = make_tool_call_done_chunk(response_id, model)
+                                        yield f"data: {orjson.dumps(done_chunk).decode()}\n\n"
+                                        yield "data: [DONE]\n\n"
+                                        tool_calls_emitted = True
+                                        success = True
+                                        logger.info(
+                                            "console chat stream tool_calls: attempt={}/{} model={} call_count={}",
+                                            attempt + 1, max_retries + 1, model, len(calls),
+                                        )
+                                        break
+                                else:
+                                    chunk = make_stream_chunk(response_id, model, tok)
+                                    yield f"data: {orjson.dumps(chunk).decode()}\n\n"
+                            if tool_calls_emitted:
+                                break
+
+                        if not tool_calls_emitted and sieve is not None:
+                            calls = sieve.flush()
+                            if calls:
+                                for i, tc in enumerate(calls):
+                                    chunk = make_tool_call_chunk(
+                                        response_id, model, i,
+                                        tc.call_id, tc.name, tc.arguments,
+                                        is_first=True,
+                                    )
+                                    yield f"data: {orjson.dumps(chunk).decode()}\n\n"
+                                done_chunk = make_tool_call_done_chunk(response_id, model)
+                                yield f"data: {orjson.dumps(done_chunk).decode()}\n\n"
+                                yield "data: [DONE]\n\n"
+                                tool_calls_emitted = True
+                                success = True
+                                logger.info(
+                                    "console chat stream tool_calls (flushed): model={} call_count={}",
+                                    model, len(calls),
+                                )
+
+                        if tool_calls_emitted:
+                            return
 
                         # 流结束，发送 final chunk
                         usage_data = adapter.usage
                         prompt_tokens = (
                             usage_data.get("input_tokens", 0) if usage_data else
-                            estimate_prompt_tokens(messages)
+                            estimate_prompt_tokens(upstream_messages)
                         )
                         completion_tokens = (
                             usage_data.get("output_tokens", 0) if usage_data else
@@ -237,12 +315,13 @@ async def completions(
 
         try:
             payload = build_console_payload(
-                messages=messages,
+                messages=upstream_messages,
                 model=model,
                 temperature=temperature,
                 top_p=top_p,
                 reasoning_effort=effort,
                 stream=True,  # 始终用流式，非流式在本地聚合
+                inject_native_tools=inject_native_tools,
             )
 
             try:
@@ -254,8 +333,30 @@ async def completions(
                 usage_data = adapter.usage
                 prompt_tokens = (
                     usage_data.get("input_tokens", 0) if usage_data else
-                    estimate_prompt_tokens(messages)
+                    estimate_prompt_tokens(upstream_messages)
                 )
+
+                if tool_names:
+                    parse_result = parse_tool_calls(adapter.full_text, tool_names)
+                    if parse_result.calls:
+                        usage = build_usage(
+                            prompt_tokens,
+                            estimate_tool_call_tokens(parse_result.calls),
+                        )
+                        result = make_tool_call_response(
+                            model,
+                            parse_result.calls,
+                            prompt_content=upstream_messages,
+                            response_id=response_id,
+                            usage=usage,
+                        )
+                        success = True
+                        logger.info(
+                            "console chat non-stream tool_calls: model={} call_count={}",
+                            model, len(parse_result.calls),
+                        )
+                        return result
+
                 completion_tokens = (
                     usage_data.get("output_tokens", 0) if usage_data else
                     estimate_tokens(adapter.full_text)

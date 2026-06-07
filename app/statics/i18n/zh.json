@@ -437,6 +437,14 @@
           "label": "正文追加信源",
           "desc": "搜索信源始终以 search_sources 字段输出。此选项控制是否同时在正文末尾追加 ## Sources 段落（兼容文本解析客户端）。"
         },
+        "consoleToolCall": {
+          "label": "Console Tool Call",
+          "desc": "允许 console.x.ai 模型使用 OpenAI / Anthropic 兼容的客户端工具调用转换层。默认关闭。"
+        },
+        "consoleNativeTools": {
+          "label": "Console 原生工具",
+          "desc": "Console Tool Call 启用时，是否继续自动注入 console.x.ai 原生 web_search / x_search 工具。默认开启。"
+        },
         "customInstruction": {
           "label": "全局附加指令",
           "desc": "为每次请求注入统一的 system 消息，用于约束模型行为或固定角色设定。"

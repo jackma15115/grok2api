@@ -328,6 +328,8 @@ async def create(
             temperature=temperature,
             top_p=top_p,
             msg_id=msg_id,
+            tools=tools,
+            tool_choice=tool_choice,
         )
 
     # -------------------------------------------------------------------------

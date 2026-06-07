@@ -43,6 +43,10 @@ enable_nsfw = true
 show_search_sources = false
 # 全局附加指令
 custom_instruction = ""
+# Console 模型是否启用客户端 function/tool call 兼容层
+console_tool_call = false
+# Console tool call 启用时是否继续自动注入 console 原生搜索工具
+console_native_tools = true
 
 # 图片返回格式
 #   grok_url  — 直接返回 Grok CDN URL

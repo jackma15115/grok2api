@@ -35,6 +35,7 @@ import orjson
 from app.platform.errors import UpstreamError
 from app.platform.logging.logger import logger
 from app.platform.config.snapshot import get_config
+from app.dataplane.reverse.protocol.tool_prompt import tool_calls_to_xml
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +116,7 @@ def build_console_payload(
     top_p: float = 0.95,
     reasoning_effort: str | None = None,
     stream: bool = True,
+    inject_native_tools: bool | None = None,
 ) -> dict[str, Any]:
     """Build the JSON payload for POST console.x.ai/v1/responses.
 
@@ -125,6 +127,7 @@ def build_console_payload(
     for msg in messages:
         role = msg.get("role", "user")
         content = msg.get("content", "")
+        tool_calls = msg.get("tool_calls")
 
         # 映射 role
         if role in ("system", "developer"):
@@ -134,6 +137,27 @@ def build_console_payload(
             api_role = "assistant"
         else:
             api_role = "user"
+
+        if role == "tool":
+            tool_call_id = msg.get("tool_call_id", "")
+            label = f"[tool result for {tool_call_id}]" if tool_call_id else "[tool result]"
+            text = content.strip() if isinstance(content, str) else str(content or "")
+            if text:
+                input_items.append({
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": f"{label}:\n{text}"}],
+                })
+            continue
+
+        if role == "assistant" and tool_calls:
+            xml = tool_calls_to_xml(tool_calls)
+            text = content.strip() if isinstance(content, str) else ""
+            body = f"{text}\n{xml}" if text else xml
+            input_items.append({
+                "role": "assistant",
+                "content": [{"type": "input_text", "text": body}],
+            })
+            continue
 
         # 处理 content
         if isinstance(content, str):
@@ -181,8 +205,15 @@ def build_console_payload(
     if console_model in _MODELS_WITH_REASONING_FIELD:
         payload["reasoning"] = {"effort": effort}
 
-    # 为 multi-agent 和支持搜索的模型添加 tools
-    if console_model in _MODELS_WITH_SEARCH_TOOLS:
+    if inject_native_tools is None:
+        cfg = get_config()
+        inject_native_tools = (
+            not cfg.get_bool("features.console_tool_call", False)
+            or cfg.get_bool("features.console_native_tools", True)
+        )
+
+    # 为 multi-agent 和支持搜索的模型添加原生 tools
+    if inject_native_tools and console_model in _MODELS_WITH_SEARCH_TOOLS:
         payload["tools"] = [
             {"type": "web_search", "enable_image_understanding": True},
             {"type": "x_search", "enable_video_understanding": True},

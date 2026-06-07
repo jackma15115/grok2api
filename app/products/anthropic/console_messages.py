@@ -12,7 +12,7 @@ from app.platform.logging.logger import logger
 from app.platform.config.snapshot import get_config
 from app.platform.errors import RateLimitError, UpstreamError
 from app.platform.runtime.clock import now_s
-from app.platform.tokens import estimate_prompt_tokens, estimate_tokens
+from app.platform.tokens import estimate_prompt_tokens, estimate_tokens, estimate_tool_call_tokens
 from app.control.account.enums import FeedbackKind
 from app.control.account.invalid_credentials import feedback_kind_for_error
 from app.control.account.runtime import get_refresh_service
@@ -25,6 +25,12 @@ from app.dataplane.reverse.protocol.xai_console_chat import (
 )
 from app.products._account_selection import reserve_account, selection_max_retries
 from app.products.openai.chat import _configured_retry_codes, _should_retry_upstream
+from app.products.openai._tool_sieve import ToolSieve
+from app.dataplane.reverse.protocol.tool_parser import parse_tool_calls
+from app.dataplane.reverse.protocol.tool_prompt import (
+    build_tool_system_prompt,
+    extract_tool_names,
+)
 
 
 def _sse(event: str, data: dict) -> str:
@@ -69,6 +75,36 @@ async def _fail_sync(token: str, mode_id: int, exc: BaseException | None = None)
         )
 
 
+def _convert_tools(tools: list[dict]) -> list[dict]:
+    result = []
+    for tool in tools:
+        result.append({
+            "type": "function",
+            "function": {
+                "name": tool.get("name", ""),
+                "description": tool.get("description", ""),
+                "parameters": tool.get("input_schema"),
+            },
+        })
+    return result
+
+
+def _convert_tool_choice(tool_choice: Any) -> Any:
+    if tool_choice is None:
+        return "auto"
+    if isinstance(tool_choice, str):
+        return tool_choice
+    if isinstance(tool_choice, dict):
+        tc_type = tool_choice.get("type", "auto")
+        if tc_type == "auto":
+            return "auto"
+        if tc_type == "any":
+            return "required"
+        if tc_type == "tool":
+            return {"type": "function", "function": {"name": tool_choice.get("name", "")}}
+    return "auto"
+
+
 async def create(
     *,
     model: str,
@@ -78,6 +114,8 @@ async def create(
     temperature: float,
     top_p: float,
     msg_id: str,
+    tools: list[dict] | None = None,
+    tool_choice: Any = None,
 ) -> dict | AsyncGenerator[str, None]:
     """Console models /v1/messages handler (Anthropic format)."""
 
@@ -87,6 +125,24 @@ async def create(
     max_retries = selection_max_retries()
     retry_codes = _configured_retry_codes(cfg)
     effort = "low" if emit_think else "none"
+    tool_names: list[str] = []
+    upstream_messages = messages
+    console_tool_call = bool(tools) and cfg.get_bool("features.console_tool_call", False)
+    inject_native_tools = (
+        not console_tool_call
+        or cfg.get_bool("features.console_native_tools", True)
+    )
+
+    if console_tool_call and tools:
+        chat_tools = _convert_tools(tools)
+        tool_names = extract_tool_names(chat_tools)
+        if tool_names:
+            internal_tool_choice = _convert_tool_choice(tool_choice)
+            tool_prompt = build_tool_system_prompt(chat_tools, internal_tool_choice)
+            upstream_messages = [
+                {"role": "system", "content": tool_prompt},
+                *messages,
+            ]
 
     from app.dataplane.account import _directory as _acct_dir
     if _acct_dir is None:
@@ -114,12 +170,13 @@ async def create(
 
                 try:
                     payload = build_console_payload(
-                        messages=messages,
+                        messages=upstream_messages,
                         model=model,
                         temperature=temperature,
                         top_p=top_p,
                         reasoning_effort=effort,
                         stream=True,
+                        inject_native_tools=inject_native_tools,
                     )
 
                     try:
@@ -133,45 +190,136 @@ async def create(
                                 "model": model,
                                 "content": [],
                                 "stop_reason": None,
-                                "usage": {"input_tokens": estimate_prompt_tokens(messages), "output_tokens": 0},
+                                "usage": {"input_tokens": estimate_prompt_tokens(upstream_messages), "output_tokens": 0},
                             },
                         })
                         yield _sse("ping", {"type": "ping"})
 
-                        # content_block_start
-                        yield _sse("content_block_start", {
-                            "type": "content_block_start",
-                            "index": 0,
-                            "content_block": {"type": "text", "text": ""},
-                        })
-
+                        sieve = ToolSieve(tool_names) if tool_names else None
+                        tool_calls_emitted = False
+                        tool_output_tokens = 0
+                        block_index = 0
+                        text_started = False
                         async for event_type, data in stream_console_chat(
                             token, payload, timeout_s=timeout_s
                         ):
                             tokens = adapter.feed(event_type, data)
                             for tok in tokens:
-                                text_buf.append(tok)
-                                yield _sse("content_block_delta", {
-                                    "type": "content_block_delta",
-                                    "index": 0,
-                                    "delta": {"type": "text_delta", "text": tok},
-                                })
+                                if sieve is not None:
+                                    safe_text, calls = sieve.feed(tok)
+                                    if calls is not None:
+                                        if text_started:
+                                            yield _sse("content_block_stop", {
+                                                "type": "content_block_stop",
+                                                "index": block_index,
+                                            })
+                                            block_index += 1
+                                            text_started = False
+                                        for call in calls:
+                                            yield _sse("content_block_start", {
+                                                "type": "content_block_start",
+                                                "index": block_index,
+                                                "content_block": {
+                                                    "type": "tool_use",
+                                                    "id": call.call_id,
+                                                    "name": call.name,
+                                                    "input": {},
+                                                },
+                                            })
+                                            yield _sse("content_block_delta", {
+                                                "type": "content_block_delta",
+                                                "index": block_index,
+                                                "delta": {
+                                                    "type": "input_json_delta",
+                                                    "partial_json": call.arguments,
+                                                },
+                                            })
+                                            yield _sse("content_block_stop", {
+                                                "type": "content_block_stop",
+                                                "index": block_index,
+                                            })
+                                            block_index += 1
+                                        tool_output_tokens = estimate_tool_call_tokens(calls)
+                                        tool_calls_emitted = True
+                                        break
+                                    text_chunk = safe_text
+                                else:
+                                    text_chunk = tok
 
-                        # content_block_stop
-                        yield _sse("content_block_stop", {
-                            "type": "content_block_stop",
-                            "index": 0,
-                        })
+                                if text_chunk:
+                                    if not text_started:
+                                        text_started = True
+                                        yield _sse("content_block_start", {
+                                            "type": "content_block_start",
+                                            "index": block_index,
+                                            "content_block": {"type": "text", "text": ""},
+                                        })
+                                    text_buf.append(text_chunk)
+                                    yield _sse("content_block_delta", {
+                                        "type": "content_block_delta",
+                                        "index": block_index,
+                                        "delta": {"type": "text_delta", "text": text_chunk},
+                                    })
+                            if tool_calls_emitted:
+                                break
+
+                        if not tool_calls_emitted and sieve is not None:
+                            calls = sieve.flush()
+                            if calls:
+                                if text_started:
+                                    yield _sse("content_block_stop", {
+                                        "type": "content_block_stop",
+                                        "index": block_index,
+                                    })
+                                    block_index += 1
+                                    text_started = False
+                                for call in calls:
+                                    yield _sse("content_block_start", {
+                                        "type": "content_block_start",
+                                        "index": block_index,
+                                        "content_block": {
+                                            "type": "tool_use",
+                                            "id": call.call_id,
+                                            "name": call.name,
+                                            "input": {},
+                                        },
+                                    })
+                                    yield _sse("content_block_delta", {
+                                        "type": "content_block_delta",
+                                        "index": block_index,
+                                        "delta": {
+                                            "type": "input_json_delta",
+                                            "partial_json": call.arguments,
+                                        },
+                                    })
+                                    yield _sse("content_block_stop", {
+                                        "type": "content_block_stop",
+                                        "index": block_index,
+                                    })
+                                    block_index += 1
+                                tool_output_tokens = estimate_tool_call_tokens(calls)
+                                tool_calls_emitted = True
+
+                        if not tool_calls_emitted:
+                            if text_started:
+                                yield _sse("content_block_stop", {
+                                    "type": "content_block_stop",
+                                    "index": block_index,
+                                })
 
                         # message_delta
                         full_text = "".join(text_buf)
                         output_tokens = (
                             adapter.usage.get("output_tokens", 0) if adapter.usage
+                            else tool_output_tokens if tool_calls_emitted
                             else estimate_tokens(full_text)
                         )
                         yield _sse("message_delta", {
                             "type": "message_delta",
-                            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                            "delta": {
+                                "stop_reason": "tool_use" if tool_calls_emitted else "end_turn",
+                                "stop_sequence": None,
+                            },
                             "usage": {"output_tokens": output_tokens},
                         })
 
@@ -180,8 +328,8 @@ async def create(
                         yield "data: [DONE]\n\n"
                         success = True
                         logger.info(
-                            "console messages stream completed: model={} text_len={} attempt={}/{}",
-                            model, len(full_text), attempt + 1, max_retries + 1,
+                            "console messages stream completed: model={} text_len={} tool_call={} attempt={}/{}",
+                            model, len(full_text), tool_calls_emitted, attempt + 1, max_retries + 1,
                         )
 
                     except UpstreamError as exc:
@@ -235,12 +383,13 @@ async def create(
 
         try:
             payload = build_console_payload(
-                messages=messages,
+                messages=upstream_messages,
                 model=model,
                 temperature=temperature,
                 top_p=top_p,
                 reasoning_effort=effort,
                 stream=True,
+                inject_native_tools=inject_native_tools,
             )
 
             try:
@@ -253,8 +402,44 @@ async def create(
                 usage_data = adapter.usage
                 input_tokens = (
                     usage_data.get("input_tokens", 0) if usage_data
-                    else estimate_prompt_tokens(messages)
+                    else estimate_prompt_tokens(upstream_messages)
                 )
+
+                if tool_names:
+                    tc_result = parse_tool_calls(full_text, tool_names)
+                    if tc_result.calls:
+                        content: list[dict] = []
+                        for call in tc_result.calls:
+                            try:
+                                parsed_input = orjson.loads(call.arguments)
+                            except (orjson.JSONDecodeError, ValueError):
+                                parsed_input = {}
+                            content.append({
+                                "type": "tool_use",
+                                "id": call.call_id,
+                                "name": call.name,
+                                "input": parsed_input,
+                            })
+                        result = {
+                            "id": msg_id,
+                            "type": "message",
+                            "role": "assistant",
+                            "model": model,
+                            "content": content,
+                            "stop_reason": "tool_use",
+                            "stop_sequence": None,
+                            "usage": {
+                                "input_tokens": input_tokens,
+                                "output_tokens": estimate_tool_call_tokens(tc_result.calls),
+                            },
+                        }
+                        success = True
+                        logger.info(
+                            "console messages non-stream tool_calls: model={} call_count={}",
+                            model, len(tc_result.calls),
+                        )
+                        return result
+
                 output_tokens = (
                     usage_data.get("output_tokens", 0) if usage_data
                     else estimate_tokens(full_text)

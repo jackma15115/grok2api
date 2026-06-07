@@ -437,6 +437,14 @@
           "label": "Append Sources to Content",
           "desc": "Search sources are always output in the search_sources field. This option controls whether to also append a ## Sources section to the response content (for backward compatibility with text-parsing clients)."
         },
+        "consoleToolCall": {
+          "label": "Console Tool Call",
+          "desc": "Allow console.x.ai models to use the OpenAI / Anthropic compatible client-side tool call conversion layer. Disabled by default."
+        },
+        "consoleNativeTools": {
+          "label": "Console Native Tools",
+          "desc": "When Console Tool Call is enabled, continue automatically injecting console.x.ai native web_search / x_search tools. Enabled by default."
+        },
         "customInstruction": {
           "label": "Global Supplemental Instruction",
           "desc": "Injects a consistent system message into every request to enforce model behavior or establish a fixed role."
