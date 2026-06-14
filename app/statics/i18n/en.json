@@ -184,6 +184,7 @@
     "export": "Export Data",
     "batchNsfw": "Enable NSFW",
     "batchNsfwDisable": "Disable NSFW",
+    "rowActionNotSupported": "Current status does not support this action",
     "batchRefresh": "Refresh Selected",
     "batchDisable": "Disable Selected",
     "batchRestore": "Restore Selected",
@@ -285,6 +286,8 @@
     "nsfwDisablingOne": "Disabling NSFW…",
     "nsfwDisableDone": "NSFW disable completed: {ok} succeeded, {fail} failed",
     "operationFailed": "Operation failed",
+    "autoNsfwOnImport": "Auto-enable NSFW after import",
+    "autoNsfwHint": "Requires additional time to detect account status",
     "unknown": "Unknown",
     "na": "—",
     "pool": {
@@ -306,7 +309,9 @@
       "disabled": "Disabled",
       "expired": "Expired",
       "invalid": "Abnormal"
-    }
+    },
+    "autoNsfwOnImport": "Auto-enable NSFW after import",
+    "autoNsfwHint": "Requires additional time to detect account status"
   },
   "config": {
     "pageTitle": "Grok2API - Configuration Management",
@@ -436,14 +441,6 @@
         "showSearchSources": {
           "label": "Append Sources to Content",
           "desc": "Search sources are always output in the search_sources field. This option controls whether to also append a ## Sources section to the response content (for backward compatibility with text-parsing clients)."
-        },
-        "consoleToolCall": {
-          "label": "Console Tool Call",
-          "desc": "Allow console.x.ai models to use the OpenAI / Anthropic compatible client-side tool call conversion layer. Disabled by default."
-        },
-        "consoleNativeTools": {
-          "label": "Console Native Tools",
-          "desc": "When Console Tool Call is enabled, continue automatically injecting console.x.ai native web_search / x_search tools. Enabled by default."
         },
         "customInstruction": {
           "label": "Global Supplemental Instruction",

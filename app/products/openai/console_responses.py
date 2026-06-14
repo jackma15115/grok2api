@@ -50,9 +50,13 @@ def _log_task_exception(task: "asyncio.Task") -> None:
 
 
 async def _quota_sync(token: str, mode_id: int) -> None:
-    """Fire-and-forget: 成功调用后持久化配额扣减和 usage_use_count。"""
+    """Fire-and-forget: 成功调用后持久化配额扣减和 usage_use_count。
+
+    Console 配额(mode_id=5)为本地管理，不依赖上游 API，
+    无论 random/quota 策略都需要执行扣减和窗口重置。
+    """
     try:
-        if current_strategy() != "quota":
+        if current_strategy() != "quota" and mode_id != 5:
             return
         svc = get_refresh_service()
         if svc:
@@ -241,7 +245,9 @@ async def create(
                         sieve = ToolSieve(tool_names) if tool_names else None
                         tool_calls_emitted = False
                         detected_fc_items: list[dict] = []
+                        detected_calls: list | None = None
                         message_started = False
+                        yield ": heartbeat\n\n"
                         async for event_type, data in stream_console_chat(
                             token, payload, timeout_s=timeout_s
                         ):
@@ -251,6 +257,7 @@ async def create(
                                 if sieve is not None:
                                     safe_text, calls = sieve.feed(tok)
                                     if calls is not None:
+                                        detected_calls = calls
                                         detected_fc_items = _build_fc_items(calls)
                                         async for evt in _emit_fc_events(detected_fc_items, 0):
                                             yield evt
@@ -301,6 +308,7 @@ async def create(
                         if not tool_calls_emitted and sieve is not None:
                             calls = sieve.flush()
                             if calls:
+                                detected_calls = calls
                                 detected_fc_items = _build_fc_items(calls)
                                 async for evt in _emit_fc_events(detected_fc_items, 0):
                                     yield evt
@@ -312,7 +320,9 @@ async def create(
                                 usage_data.get("input_tokens", 0) if usage_data
                                 else estimate_prompt_tokens(upstream_messages)
                             )
-                            output_tokens = estimate_tool_call_tokens(detected_fc_items)
+                            output_tokens = estimate_tool_call_tokens(
+                                detected_calls or detected_fc_items
+                            )
                             yield format_sse("response.completed", {
                                 "type": "response.completed",
                                 "response": make_resp_object(

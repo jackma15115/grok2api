@@ -184,6 +184,7 @@
     "export": "导出数据",
     "batchNsfw": "开启 NSFW",
     "batchNsfwDisable": "关闭 NSFW",
+    "rowActionNotSupported": "当前状态不支持此操作",
     "batchRefresh": "刷新选中",
     "batchDisable": "禁用选中",
     "batchRestore": "恢复选中",
@@ -285,6 +286,8 @@
     "nsfwDisablingOne": "正在关闭 NSFW…",
     "nsfwDisableDone": "NSFW 关闭完成：成功 {ok} 个，失败 {fail} 个",
     "operationFailed": "操作失败",
+    "autoNsfwOnImport": "导入后自动开启 NSFW",
+    "autoNsfwHint": "需要额外时间检测账户状态",
     "unknown": "未知",
     "na": "—",
     "pool": {
@@ -306,7 +309,9 @@
       "disabled": "禁用",
       "expired": "过期",
       "invalid": "异常"
-    }
+    },
+    "autoNsfwOnImport": "导入后自动开启 NSFW",
+    "autoNsfwHint": "需要额外时间检测账户状态"
   },
   "config": {
     "pageTitle": "Grok2API - 配置管理",
@@ -436,14 +441,6 @@
         "showSearchSources": {
           "label": "正文追加信源",
           "desc": "搜索信源始终以 search_sources 字段输出。此选项控制是否同时在正文末尾追加 ## Sources 段落（兼容文本解析客户端）。"
-        },
-        "consoleToolCall": {
-          "label": "Console Tool Call",
-          "desc": "允许 console.x.ai 模型使用 OpenAI / Anthropic 兼容的客户端工具调用转换层。默认关闭。"
-        },
-        "consoleNativeTools": {
-          "label": "Console 原生工具",
-          "desc": "Console Tool Call 启用时，是否继续自动注入 console.x.ai 原生 web_search / x_search 工具。默认开启。"
         },
         "customInstruction": {
           "label": "全局附加指令",

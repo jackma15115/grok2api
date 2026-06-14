@@ -56,9 +56,13 @@ def _log_task_exception(task: "asyncio.Task") -> None:
 
 
 async def _quota_sync(token: str, mode_id: int) -> None:
-    """Fire-and-forget: 成功调用后持久化配额扣减和 usage_use_count。"""
+    """Fire-and-forget: 成功调用后持久化配额扣减和 usage_use_count。
+
+    Console 配额(mode_id=5)为本地管理，不依赖上游 API，
+    无论 random/quota 策略都需要执行扣减和窗口重置。
+    """
     try:
-        if current_strategy() != "quota":
+        if current_strategy() != "quota" and mode_id != 5:
             return
         svc = get_refresh_service()
         if svc:
@@ -175,6 +179,7 @@ async def completions(
                     )
 
                     try:
+                        yield ": heartbeat\n\n"
                         sieve = ToolSieve(tool_names) if tool_names else None
                         tool_calls_emitted = False
                         async for event_type, data in stream_console_chat(

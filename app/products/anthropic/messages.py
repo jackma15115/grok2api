@@ -381,6 +381,7 @@ async def create(
                     yield _sse("ping", {"type": "ping"})
 
                     ended = False
+                    yield ": heartbeat\n\n"
                     async for line in _stream_chat(
                         token     = token,
                         mode_id   = ModeId(selected_mode_id),
