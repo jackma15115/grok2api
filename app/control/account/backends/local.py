@@ -17,10 +17,18 @@ from ..models import (
     AccountRecord,
     RuntimeSnapshot,
 )
-from ..quota_defaults import default_quota_set
+from ..quota_defaults import default_quota_set, BASIC_CONSOLE_LIMIT, BASIC_CONSOLE_WINDOW_SECONDS
 
 _TBL = "accounts"
 _META = "account_meta"
+_TOKEN_PAYLOAD_QUOTAS = (
+    ("auto",      "quota_auto",      True),
+    ("fast",      "quota_fast",      True),
+    ("expert",    "quota_expert",    True),
+    ("heavy",     "quota_heavy",     False),
+    ("grok_4_3",  "quota_grok_4_3",  False),  # 补上，避免 super/heavy 账号余额显示为空
+    ("console",   "quota_console",   True),
+)
 
 
 class LocalAccountRepository:
@@ -37,8 +45,13 @@ class LocalAccountRepository:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+        except sqlite3.OperationalError:
+            # WAL 模式在 NFS / 某些 Docker bind mount 文件系统上不支持，
+            # 静默 fallback 到默认 DELETE journal mode，功能不受影响。
+            pass
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
@@ -85,6 +98,8 @@ class LocalAccountRepository:
                     ON {_TBL} (pool, status);
                 CREATE INDEX IF NOT EXISTS idx_acc_deleted
                     ON {_TBL} (deleted_at) WHERE deleted_at IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_acc_live_updated
+                    ON {_TBL} (updated_at DESC) WHERE deleted_at IS NULL;
             """)
             self._ensure_column_sync(conn, "quota_grok_4_3", "TEXT NOT NULL DEFAULT '{}'")
             self._ensure_column_sync(conn, "quota_console", "TEXT NOT NULL DEFAULT '{}'")
@@ -162,6 +177,41 @@ class LocalAccountRepository:
             "revision":         revision,
         }
 
+    @staticmethod
+    def _parse_tags(raw: Any) -> list[str]:
+        try:
+            tags = json.loads(raw or "[]")
+        except (TypeError, ValueError):
+            return []
+        return tags if isinstance(tags, list) else []
+
+    @staticmethod
+    def _payload_int(value: Any) -> int:
+        return int(value or 0)
+
+    @classmethod
+    def _row_to_token_payload(cls, row: sqlite3.Row) -> dict[str, Any]:
+        quota: dict[str, dict[str, int]] = {}
+        for mode, _column, always_include in _TOKEN_PAYLOAD_QUOTAS:
+            remaining = row[f"{mode}_remaining"]
+            total = row[f"{mode}_total"]
+            if always_include or remaining is not None or total is not None:
+                quota[mode] = {
+                    "remaining": cls._payload_int(remaining),
+                    "total": cls._payload_int(total),
+                }
+
+        return {
+            "token": row["token"],
+            "pool": row["pool"] or "basic",
+            "status": row["status"],
+            "quota": quota,
+            "use_count": cls._payload_int(row["usage_use_count"]),
+            "fail_count": cls._payload_int(row["usage_fail_count"]),
+            "last_used_at": row["last_use_at"],
+            "tags": cls._parse_tags(row["tags"]),
+        }
+
     def _upsert_sync(
         self,
         conn: sqlite3.Connection,
@@ -169,53 +219,75 @@ class LocalAccountRepository:
         revision: int,
     ) -> int:
         ts = now_ms()
-        count = 0
+
+        # 按 pool 缓存配额 JSON，避免重复计算（同一 pool 的配额完全相同）
+        _quota_json_cache: dict[str, dict[str, str]] = {}
+
+        def _get_quota_json(pool: str) -> dict[str, str]:
+            cached = _quota_json_cache.get(pool)
+            if cached is not None:
+                return cached
+            qs = default_quota_set(pool)
+            result = {
+                "qa": json.dumps(qs.auto.to_dict()),
+                "qf": json.dumps(qs.fast.to_dict()),
+                "qe": json.dumps(qs.expert.to_dict()),
+                "qh": json.dumps(qs.heavy.to_dict())    if qs.heavy    else "{}",
+                "qg": json.dumps(qs.grok_4_3.to_dict()) if qs.grok_4_3 else "{}",
+                "qc": json.dumps(qs.console.to_dict())  if qs.console  else "{}",
+            }
+            _quota_json_cache[pool] = result
+            return result
+
+        # 批量准备参数
+        rows: list[tuple] = []
         for item in items:
-            try:
-                token = AccountRecord.model_validate({"token": item.token, "pool": item.pool}).token
-            except ValueError:
+            # 轻量 token 清洗（API 层 _sanitize 已做过完整清洗，此处仅做安全兜底）
+            token = str(item.token or "").strip()
+            if token.startswith("sso="):
+                token = token[4:]
+            token = token.encode("ascii", errors="ignore").decode("ascii").strip()
+            if not token:
                 continue
             pool = item.pool if item.pool in ("basic", "super", "heavy") else "basic"
-            qs   = default_quota_set(pool)
-            conn.execute(
-                f"""
-                INSERT INTO {_TBL} (
-                    token, pool, status, created_at, updated_at,
-                    tags, quota_auto, quota_fast, quota_expert, quota_heavy, quota_grok_4_3, quota_console,
-                    usage_use_count, usage_fail_count, usage_sync_count,
-                    ext, revision
-                ) VALUES (
-                    :token, :pool, 'active', :ts, :ts,
-                    :tags, :qa, :qf, :qe, :qh, :qg, :qc,
-                    0, 0, 0, :ext, :rev
-                )
-                ON CONFLICT(token) DO UPDATE SET
-                    pool           = excluded.pool,
-                    status         = 'active',
-                    deleted_at     = NULL,
-                    updated_at     = excluded.updated_at,
-                    tags           = excluded.tags,
-                    quota_console  = excluded.quota_console,
-                    ext            = excluded.ext,
-                    revision       = excluded.revision
-                """,
-                {
-                    "token": token,
-                    "pool":  pool,
-                    "ts":    ts,
-                    "tags":  json.dumps(item.tags),
-                    "qa":    json.dumps(qs.auto.to_dict()),
-                    "qf":    json.dumps(qs.fast.to_dict()),
-                    "qe":    json.dumps(qs.expert.to_dict()),
-                    "qh":    json.dumps(qs.heavy.to_dict())    if qs.heavy    else "{}",
-                    "qg":    json.dumps(qs.grok_4_3.to_dict()) if qs.grok_4_3 else "{}",
-                    "qc":    json.dumps(qs.console.to_dict())  if qs.console  else "{}",
-                    "ext":   json.dumps(item.ext),
-                    "rev":   revision,
-                },
+            q = _get_quota_json(pool)
+            rows.append((
+                token, pool, ts, ts,
+                json.dumps(item.tags),
+                q["qa"], q["qf"], q["qe"], q["qh"], q["qg"], q["qc"],
+                json.dumps(item.ext),
+                revision,
+            ))
+
+        if not rows:
+            return 0
+
+        # 批量插入（1 次 executemany 代替 N 次 execute）
+        conn.executemany(
+            f"""
+            INSERT INTO {_TBL} (
+                token, pool, status, created_at, updated_at,
+                tags, quota_auto, quota_fast, quota_expert, quota_heavy, quota_grok_4_3, quota_console,
+                usage_use_count, usage_fail_count, usage_sync_count,
+                ext, revision
+            ) VALUES (
+                ?, ?, 'active', ?, ?,
+                ?, ?, ?, ?, ?, ?, ?,
+                0, 0, 0, ?, ?
             )
-            count += conn.execute("SELECT changes()").fetchone()[0]
-        return count
+            ON CONFLICT(token) DO UPDATE SET
+                pool           = excluded.pool,
+                status         = 'active',
+                deleted_at     = NULL,
+                updated_at     = excluded.updated_at,
+                tags           = excluded.tags,
+                quota_console  = excluded.quota_console,
+                ext            = excluded.ext,
+                revision       = excluded.revision
+            """,
+            rows,
+        )
+        return len(rows)
 
     def _patch_sync(
         self,
@@ -233,7 +305,6 @@ class LocalAccountRepository:
             if row is None:
                 continue
             record = self._row_to_record(row)
-            qs = record.quota_set()
 
             sets: dict[str, Any] = {"updated_at": ts, "revision": revision}
 
@@ -293,7 +364,7 @@ class LocalAccountRepository:
             if patch.clear_failures:
                 for k in ("cooldown_until", "cooldown_reason", "disabled_at",
                           "disabled_reason", "expired_at", "expired_reason",
-                          "forbidden_strikes"):
+                          "forbidden_strikes", "console_429_count"):
                     ext.pop(k, None)
                 sets["status"]           = AccountStatus.ACTIVE.value
                 sets["usage_fail_count"] = 0
@@ -352,8 +423,11 @@ class LocalAccountRepository:
                 ).fetchall()
                 items: list[AccountRecord] = []
                 deleted: list[str] = []
+                batch_max_rev = 0
                 for row in rows:
                     r = self._row_to_record(row)
+                    if r.revision > batch_max_rev:
+                        batch_max_rev = r.revision
                     if r.is_deleted():
                         deleted.append(r.token)
                     else:
@@ -361,6 +435,7 @@ class LocalAccountRepository:
                 has_more = len(rows) == limit
                 return AccountChangeSet(
                     revision=rev,
+                    batch_max_revision=batch_max_rev,
                     items=items,
                     deleted_tokens=deleted,
                     has_more=has_more,
@@ -493,6 +568,103 @@ class LocalAccountRepository:
 
         return await asyncio.to_thread(_sync)
 
+    @classmethod
+    def _token_payload_select_sql(cls) -> str:
+        quota_select = ", ".join(
+            f"CASE WHEN json_valid({column}) "
+            f"THEN json_extract({column}, '$.remaining') END AS {mode}_remaining, "
+            f"CASE WHEN json_valid({column}) "
+            f"THEN json_extract({column}, '$.total') END AS {mode}_total"
+            for mode, column, _always_include in _TOKEN_PAYLOAD_QUOTAS
+        )
+        return f"""
+            SELECT
+                token,
+                pool,
+                status,
+                tags,
+                usage_use_count,
+                usage_fail_count,
+                last_use_at,
+                {quota_select}
+            FROM {_TBL}
+            WHERE deleted_at IS NULL
+            ORDER BY updated_at DESC
+            """
+
+    async def list_token_payloads(self) -> list[dict[str, Any]]:
+        """Return the compact payload needed by the admin account list."""
+
+        def _sync() -> list[dict[str, Any]]:
+            with closing(self._connect()) as conn:
+                cursor = conn.execute(self._token_payload_select_sql())
+                return [self._row_to_token_payload(r) for r in cursor]
+
+        return await asyncio.to_thread(_sync)
+
+    async def list_invalid_tokens(self) -> list[str]:
+        def _sync() -> list[str]:
+            with closing(self._connect()) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT token
+                    FROM {_TBL}
+                    WHERE deleted_at IS NULL
+                      AND status NOT IN (?, ?, ?, ?)
+                    ORDER BY updated_at DESC
+                    """,
+                    (
+                        AccountStatus.ACTIVE.value,
+                        AccountStatus.COOLING.value,
+                        AccountStatus.DISABLED.value,
+                        AccountStatus.EXPIRED.value,  # EXPIRED 是配额误判，不当作垃圾删除
+                    ),
+                )
+                return [row["token"] for row in rows]
+
+        return await asyncio.to_thread(_sync)
+
+    async def purge_deleted_accounts(
+        self,
+        *,
+        deleted_before_ms: int,
+        batch_size: int = 5000,
+        vacuum: bool = True,
+    ) -> int:
+        def _sync() -> int:
+            total = 0
+            limit = max(1, int(batch_size))
+            with closing(self._connect()) as conn:
+                while True:
+                    rows = conn.execute(
+                        f"""
+                        SELECT token
+                        FROM {_TBL}
+                        WHERE deleted_at IS NOT NULL
+                          AND deleted_at < ?
+                        ORDER BY deleted_at
+                        LIMIT ?
+                        """,
+                        (deleted_before_ms, limit),
+                    ).fetchall()
+                    if not rows:
+                        break
+                    cursor = conn.executemany(
+                        f"DELETE FROM {_TBL} WHERE token = ?",
+                        [(row["token"],) for row in rows],
+                    )
+                    affected = cursor.rowcount if cursor.rowcount >= 0 else len(rows)
+                    total += int(affected)
+                    conn.commit()
+                    if affected <= 0:
+                        break
+                if total > 0 and vacuum:
+                    conn.execute("VACUUM")
+            return total
+
+        async with self._lock:
+            return await asyncio.to_thread(_sync)
+
     async def replace_pool(
         self,
         command: BulkReplacePoolCommand,
@@ -515,6 +687,142 @@ class LocalAccountRepository:
                 return AccountMutationResult(
                     upserted=upserted, deleted=deleted, revision=rev
                 )
+
+        async with self._lock:
+            return await asyncio.to_thread(_sync)
+
+    async def reset_expired_console_windows(self) -> int:
+        """Batch-reset exhausted + expired console quotas via direct SQL.
+
+        处理两种异常情况：
+        1. 老条件：remaining<=0 且 (reset_at IS NULL 或已过期) → 正常配额耗尽恢复
+        2. 新条件 (M6)：reset_at 已过期（即使 remaining>0）→ 异常数据归位
+           （来源：人工 patch、迁移数据、M1 历史副作用等）
+        """
+        def _sync() -> int:
+            with closing(self._connect()) as conn:
+                now = now_ms()
+                # 先查有多少需要重置的
+                count = conn.execute(
+                    f"""
+                    SELECT COUNT(*) FROM {_TBL}
+                    WHERE status = 'active'
+                      AND deleted_at IS NULL
+                      AND (
+                        (
+                          CAST(json_extract(quota_console, '$.remaining') AS INTEGER) <= 0
+                          AND (
+                            json_extract(quota_console, '$.reset_at') IS NULL
+                            OR CAST(json_extract(quota_console, '$.reset_at') AS INTEGER) < ?
+                          )
+                        )
+                        OR
+                        (
+                          json_extract(quota_console, '$.reset_at') IS NOT NULL
+                          AND CAST(json_extract(quota_console, '$.reset_at') AS INTEGER) < ?
+                        )
+                      )
+                    """,
+                    (now, now),
+                ).fetchone()[0]
+                if count == 0:
+                    return 0
+
+                # 从 quota_defaults.py 动态读取，不硬编码
+                reset_json = json.dumps({
+                    "remaining": BASIC_CONSOLE_LIMIT,
+                    "total": BASIC_CONSOLE_LIMIT,
+                    "window_seconds": BASIC_CONSOLE_WINDOW_SECONDS,
+                    "reset_at": None,
+                    "synced_at": now,
+                    "source": 0,
+                })
+                rev = self._bump_revision(conn)
+                conn.execute(
+                    f"""
+                    UPDATE {_TBL}
+                    SET quota_console = ?, revision = ?, updated_at = ?
+                    WHERE status = 'active'
+                      AND deleted_at IS NULL
+                      AND (
+                        (
+                          CAST(json_extract(quota_console, '$.remaining') AS INTEGER) <= 0
+                          AND (
+                            json_extract(quota_console, '$.reset_at') IS NULL
+                            OR CAST(json_extract(quota_console, '$.reset_at') AS INTEGER) < ?
+                          )
+                        )
+                        OR
+                        (
+                          json_extract(quota_console, '$.reset_at') IS NOT NULL
+                          AND CAST(json_extract(quota_console, '$.reset_at') AS INTEGER) < ?
+                        )
+                      )
+                    """,
+                    (reset_json, rev, now, now, now),
+                )
+                affected = conn.execute("SELECT changes()").fetchone()[0]
+                conn.commit()
+                return affected
+
+        async with self._lock:
+            return await asyncio.to_thread(_sync)
+
+    async def recover_console_expired_accounts(self) -> int:
+        """Auto-recover console 429 EXPIRED accounts with successful history.
+
+        Conditions:
+        - status = 'expired'
+        - state_reason = 'console_429_threshold_exceeded'
+        - usage_use_count > 5
+        - ext.expired_at <= now - 1 hour
+        """
+        def _sync() -> int:
+            with closing(self._connect()) as conn:
+                now = now_ms()
+                recovery_threshold = now - 3600 * 1000
+
+                # 查询符合条件的账号 token 和 ext
+                rows = conn.execute(
+                    f"""
+                    SELECT token, ext FROM {_TBL}
+                    WHERE status = 'expired'
+                      AND deleted_at IS NULL
+                      AND state_reason = 'console_429_threshold_exceeded'
+                      AND usage_use_count > 5
+                      AND CAST(json_extract(ext, '$.expired_at') AS INTEGER) <= ?
+                    """,
+                    (recovery_threshold,),
+                ).fetchall()
+
+                if not rows:
+                    return 0
+
+                rev = self._bump_revision(conn)
+                for row in rows:
+                    token, ext_raw = row
+                    try:
+                        ext = json.loads(ext_raw) if ext_raw else {}
+                    except (ValueError, TypeError):
+                        ext = {}
+                    # 清理 EXPIRED 相关字段
+                    for k in ("expired_at", "expired_reason",
+                              "console_429_count", "console_429_last_at"):
+                        ext.pop(k, None)
+                    conn.execute(
+                        f"""
+                        UPDATE {_TBL}
+                        SET status = 'active',
+                            state_reason = NULL,
+                            ext = ?,
+                            revision = ?,
+                            updated_at = ?
+                        WHERE token = ?
+                        """,
+                        (json.dumps(ext), rev, now, token),
+                    )
+                conn.commit()
+                return len(rows)
 
         async with self._lock:
             return await asyncio.to_thread(_sync)

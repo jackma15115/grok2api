@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.control.account.enums import FeedbackKind
+from app.control.account.enums import AccountStatus, FeedbackKind
 from app.control.account.backends.local import LocalAccountRepository
 from app.control.account.commands import AccountPatch, AccountUpsert
 from app.control.account.enums import QuotaSource
@@ -69,16 +69,18 @@ def test_console_local_use_repairs_broken_quota_then_decrements():
         await svc.refresh_call_async("token-a", 5)
 
         console = repo.record.quota_set().console
+        default = default_quota_window("basic", 5)
+        assert default is not None
         assert console is not None
-        assert console.remaining == 29
-        assert console.total == 30
-        assert console.window_seconds == 900
+        assert console.remaining == default.total - 1
+        assert console.total == default.total
+        assert console.window_seconds == default.window_seconds
         assert repo.record.usage_use_count == 1
 
     asyncio.run(run())
 
 
-def test_console_rate_limit_failure_does_not_zero_persisted_quota():
+def test_console_rate_limit_failure_zeros_quota_and_starts_reset_window():
     async def run():
         window = default_quota_window("basic", 5)
         record = AccountRecord(
@@ -92,9 +94,39 @@ def test_console_rate_limit_failure_does_not_zero_persisted_quota():
         await svc.record_failure_async("token-a", 5, UpstreamError("limited", status=429))
 
         console = repo.record.quota_set().console
-        assert console == window
+        assert console is not None
+        assert console.remaining == 0
+        assert console.total == window.total
+        assert console.window_seconds == window.window_seconds
+        assert console.reset_at is not None
         assert repo.record.usage_fail_count == 1
         assert repo.record.last_fail_reason == "rate_limited"
+        assert repo.record.ext["console_429_count"] == 1
+
+    asyncio.run(run())
+
+
+def test_console_third_rate_limit_marks_account_expired():
+    async def run():
+        window = default_quota_window("basic", 5)
+        assert window is not None
+        record = AccountRecord(
+            token="token-a",
+            pool="basic",
+            quota={"console": window.to_dict()},
+        )
+        repo = _MemoryRepo(record)
+        svc = AccountRefreshService(repo)
+
+        for _ in range(3):
+            await svc.record_failure_async(
+                "token-a", 5, UpstreamError("limited", status=429)
+            )
+
+        assert repo.record.status == AccountStatus.EXPIRED
+        assert repo.record.state_reason == "console_429_threshold_exceeded"
+        assert repo.record.ext["console_429_count"] == 3
+        assert repo.record.ext["expired_reason"] == "console_429_threshold_exceeded"
 
     asyncio.run(run())
 
@@ -177,11 +209,11 @@ def test_console_runtime_window_resets_after_local_exhaustion():
         )
 
         assert await directory.reserve(
-            int(PoolId.BASIC), int(ModeId.CONSOLE), now_s_override=999
+            int(PoolId.BASIC), int(ModeId.CONSOLE), now_s_override=3699
         ) is None
 
         lease = await directory.reserve(
-            int(PoolId.BASIC), int(ModeId.CONSOLE), now_s_override=1000
+            int(PoolId.BASIC), int(ModeId.CONSOLE), now_s_override=3700
         )
         assert lease is not None
         await directory.release(lease)
@@ -232,9 +264,13 @@ class _MemoryRepo:
         quota = dict(self.record.quota)
         if patch.quota_console is not None:
             quota["console"] = patch.quota_console
+        ext = {**self.record.ext, **(patch.ext_merge or {})}
         self.record = self.record.model_copy(
             update={
                 "quota": quota,
+                "status": patch.status or self.record.status,
+                "state_reason": patch.state_reason or self.record.state_reason,
+                "ext": ext,
                 "usage_use_count": self.record.usage_use_count
                 + (patch.usage_use_delta or 0),
                 "usage_fail_count": self.record.usage_fail_count
