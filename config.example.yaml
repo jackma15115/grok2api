@@ -22,6 +22,13 @@ auth:
   # [按需修改] 外部地址使用 HTTPS 时必须设为 true。
   secureCookies: false
 
+provider:
+  console:
+    baseURL: "https://console.x.ai"
+    chatTimeout: 5m
+    toolCall: false
+    nativeTools: true
+
 secrets:
   # [必须修改] 至少 32 个字符。快速生成：openssl rand -hex 32
   jwtSecret: "replace-with-at-least-32-characters"

@@ -53,6 +53,8 @@ type ProviderWebConfig struct {
 type ProviderConsoleConfig struct {
 	BaseURL     string
 	ChatTimeout string
+	ToolCall    bool
+	NativeTools bool
 }
 
 // ServerConfig 是管理接口使用的推理入口容量输入。
@@ -277,6 +279,7 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 	if value.ProviderConsole != (settingsdomain.ProviderConsoleConfig{}) {
 		base.Provider.Console = config.ConsoleProviderConfig{
 			BaseURL: value.ProviderConsole.BaseURL, ChatTimeout: config.Duration(value.ProviderConsole.ChatTimeout),
+			ToolCall: value.ProviderConsole.ToolCall, NativeTools: value.ProviderConsole.NativeTools,
 		}
 	}
 	randomDelay := time.Duration(-1)
@@ -329,6 +332,7 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 		},
 		ProviderConsole: settingsdomain.ProviderConsoleConfig{
 			BaseURL: value.Provider.Console.BaseURL, ChatTimeout: value.Provider.Console.ChatTimeout.Value(),
+			ToolCall: value.Provider.Console.ToolCall, NativeTools: value.Provider.Console.NativeTools,
 		},
 		Batch: settingsdomain.BatchConfig{
 			ImportConcurrency: value.Batch.ImportConcurrency, ConversionConcurrency: value.Batch.ConversionConcurrency,
@@ -398,6 +402,8 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 	next.Provider.Web.MediaConcurrency = input.ProviderWeb.MediaConcurrency
 	next.Provider.Web.AllowNSFW = input.ProviderWeb.AllowNSFW
 	next.Provider.Console.BaseURL = strings.TrimSpace(input.ProviderConsole.BaseURL)
+	next.Provider.Console.ToolCall = input.ProviderConsole.ToolCall
+	next.Provider.Console.NativeTools = input.ProviderConsole.NativeTools
 	next.Batch = config.BatchConfig{
 		ImportConcurrency: input.Batch.ImportConcurrency, ConversionConcurrency: input.Batch.ConversionConcurrency,
 		SyncConcurrency: input.Batch.SyncConcurrency, RefreshConcurrency: input.Batch.RefreshConcurrency,
@@ -465,6 +471,7 @@ func toEditable(cfg config.Config) EditableConfig {
 		},
 		ProviderConsole: ProviderConsoleConfig{
 			BaseURL: cfg.Provider.Console.BaseURL, ChatTimeout: cfg.Provider.Console.ChatTimeout.String(),
+			ToolCall: cfg.Provider.Console.ToolCall, NativeTools: cfg.Provider.Console.NativeTools,
 		},
 		Batch: BatchConfig{
 			ImportConcurrency: cfg.Batch.ImportConcurrency, ConversionConcurrency: cfg.Batch.ConversionConcurrency,

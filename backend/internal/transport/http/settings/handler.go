@@ -40,6 +40,8 @@ type serverConfigDTO struct {
 type providerConsoleConfigDTO struct {
 	BaseURL     string `json:"baseURL"`
 	ChatTimeout string `json:"chatTimeout"`
+	ToolCall    bool   `json:"toolCall"`
+	NativeTools bool   `json:"nativeTools"`
 }
 
 type mediaConfigDTO struct {
@@ -170,6 +172,7 @@ func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
 		},
 		ProviderConsole: settingsapp.ProviderConsoleConfig{
 			BaseURL: value.ProviderConsole.BaseURL, ChatTimeout: value.ProviderConsole.ChatTimeout,
+			ToolCall: value.ProviderConsole.ToolCall, NativeTools: value.ProviderConsole.NativeTools,
 		},
 		Batch: settingsapp.BatchConfig{
 			ImportConcurrency: value.Batch.ImportConcurrency, ConversionConcurrency: value.Batch.ConversionConcurrency,
@@ -218,6 +221,7 @@ func newSettingsResponse(value settingsapp.Snapshot) settingsResponse {
 			},
 			ProviderConsole: providerConsoleConfigDTO{
 				BaseURL: config.ProviderConsole.BaseURL, ChatTimeout: config.ProviderConsole.ChatTimeout,
+				ToolCall: config.ProviderConsole.ToolCall, NativeTools: config.ProviderConsole.NativeTools,
 			},
 			Batch: batchConfigDTO{
 				ImportConcurrency: config.Batch.ImportConcurrency, ConversionConcurrency: config.Batch.ConversionConcurrency,

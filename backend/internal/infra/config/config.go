@@ -152,6 +152,8 @@ type ConsoleProviderConfig struct {
 	BaseURL         string   `yaml:"baseURL"`
 	LegacyUserAgent string   `yaml:"userAgent"` // Deprecated: 仅用于兼容旧配置文件，不参与请求。
 	ChatTimeout     Duration `yaml:"chatTimeout"`
+	ToolCall        bool     `yaml:"toolCall"`
+	NativeTools     bool     `yaml:"nativeTools"`
 }
 
 // BatchConfig 定义可热加载的账号批量任务并发上限。
@@ -529,7 +531,10 @@ func defaultConfig() Config {
 				MediaConcurrency: 4, RecoveryBackoffBase: Duration(30 * time.Second),
 				RecoveryBackoffMax: Duration(30 * time.Minute),
 			},
-			Console: ConsoleProviderConfig{BaseURL: "https://console.x.ai", ChatTimeout: Duration(5 * time.Minute)},
+			Console: ConsoleProviderConfig{
+				BaseURL: "https://console.x.ai", ChatTimeout: Duration(5 * time.Minute),
+				ToolCall: false, NativeTools: true,
+			},
 		},
 		Batch: BatchConfig{
 			ImportConcurrency: 25, ConversionConcurrency: 25, SyncConcurrency: 25,

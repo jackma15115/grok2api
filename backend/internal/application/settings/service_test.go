@@ -54,6 +54,8 @@ func TestUpdatePersistsAppliesAndReportsRestart(t *testing.T) {
 	input.Frontend.PublicAPIBaseURL = "https://public.example.com"
 	input.ProviderConsole.BaseURL = "https://console.example.com"
 	input.ProviderConsole.ChatTimeout = "6m"
+	input.ProviderConsole.ToolCall = true
+	input.ProviderConsole.NativeTools = false
 	input.Batch = BatchConfig{ImportConcurrency: 26, ConversionConcurrency: 27, SyncConcurrency: 28, RefreshConcurrency: 29, RandomDelay: "750ms"}
 
 	snapshot, err := service.Update(context.Background(), service.Get().Revision, input)
@@ -75,7 +77,7 @@ func TestUpdatePersistsAppliesAndReportsRestart(t *testing.T) {
 	if applied.Batch.ImportConcurrency != 26 || applied.Batch.ConversionConcurrency != 27 || applied.Batch.SyncConcurrency != 28 || applied.Batch.RefreshConcurrency != 29 || applied.Batch.RandomDelay.Value() != 750*time.Millisecond {
 		t.Fatalf("batch configuration was not applied: %#v", applied.Batch)
 	}
-	if applied.Provider.Console.BaseURL != "https://console.example.com" || applied.Provider.Console.ChatTimeout.Value() != 6*time.Minute {
+	if applied.Provider.Console.BaseURL != "https://console.example.com" || applied.Provider.Console.ChatTimeout.Value() != 6*time.Minute || !applied.Provider.Console.ToolCall || applied.Provider.Console.NativeTools {
 		t.Fatalf("console configuration was not applied: %#v", applied.Provider.Console)
 	}
 	if len(snapshot.RestartRequired) != 1 || snapshot.RestartRequired[0] != "audit.bufferSize" {
@@ -85,7 +87,7 @@ func TestUpdatePersistsAppliesAndReportsRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.Server.MaxConcurrentRequests != 2048 || reloaded.Routing.MaxAttempts != 5 || !reloaded.Routing.PreferFreeBuild || reloaded.Audit.BufferSize != input.Audit.BufferSize || reloaded.Media.MaxTotalBytes != 2<<30 || reloaded.Media.CleanupThresholdPercent != 75 || reloaded.Batch.SyncConcurrency != 28 || reloaded.Batch.RandomDelay.Value() != 750*time.Millisecond || reloaded.Provider.Console.BaseURL != "https://console.example.com" {
+	if reloaded.Server.MaxConcurrentRequests != 2048 || reloaded.Routing.MaxAttempts != 5 || !reloaded.Routing.PreferFreeBuild || reloaded.Audit.BufferSize != input.Audit.BufferSize || reloaded.Media.MaxTotalBytes != 2<<30 || reloaded.Media.CleanupThresholdPercent != 75 || reloaded.Batch.SyncConcurrency != 28 || reloaded.Batch.RandomDelay.Value() != 750*time.Millisecond || reloaded.Provider.Console.BaseURL != "https://console.example.com" || !reloaded.Provider.Console.ToolCall || reloaded.Provider.Console.NativeTools {
 		t.Fatalf("configuration was not persisted")
 	}
 }

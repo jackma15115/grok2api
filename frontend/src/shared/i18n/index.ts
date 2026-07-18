@@ -78,6 +78,8 @@ const resources = {
         availableBreakdown: "Build {{build}} · Web {{web}} · Console {{console}} 可用",
         baseURL: "上游地址",
         chatTimeout: "聊天超时",
+        toolCall: "Tool call",
+        nativeTools: "Auto-inject native tools",
       },
       accountCredential: {
         label: "凭据续期",
@@ -1002,6 +1004,8 @@ const resources = {
         availableBreakdown: "Build {{build}} · Web {{web}} · Console {{console}} available",
         baseURL: "Upstream URL",
         chatTimeout: "Chat timeout",
+        toolCall: "Tool call",
+        nativeTools: "Auto-inject native tools",
       },
       accountCredential: {
         label: "Credential renewal",

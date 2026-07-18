@@ -29,6 +29,8 @@ type FrontendConfig struct {
 type ProviderConsoleConfig struct {
 	BaseURL     string
 	ChatTimeout time.Duration
+	ToolCall    bool
+	NativeTools bool
 }
 
 type MediaConfig struct {

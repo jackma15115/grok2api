@@ -332,6 +332,7 @@ func consoleProviderConfig(cfg config.Config) consoleprovider.Config {
 	return consoleprovider.Config{
 		BaseURL: cfg.Provider.Console.BaseURL, SessionBaseURL: cfg.Provider.Web.BaseURL,
 		TimeoutSeconds: int(cfg.Provider.Console.ChatTimeout.Value().Seconds()),
+		ToolCall:       cfg.Provider.Console.ToolCall, NativeTools: cfg.Provider.Console.NativeTools,
 	}
 }
 

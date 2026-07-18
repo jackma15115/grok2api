@@ -79,6 +79,8 @@ export const settingsSchema = z.object({
   providerConsole: z.object({
     baseURL: z.url().refine((value) => value.startsWith("https://")),
     chatTimeout: consoleChatDuration,
+    toolCall: z.boolean(),
+    nativeTools: z.boolean(),
   }),
   batch: z.object({
     importConcurrency: positiveInteger.max(50),

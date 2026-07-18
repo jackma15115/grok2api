@@ -238,7 +238,7 @@ func TestAccountRepositoryDecrementsQuotaByAmountAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	if err := repo.SaveQuotaWindows(ctx, value.ID, account.WebTierSuper, now, []account.QuotaWindow{{AccountID: value.ID, Mode: "fast", Remaining: 10, Total: 10, UpdatedAt: now}}); err != nil {
+	if err := repo.SaveQuotaWindows(ctx, value.ID, account.WebTierSuper, now, []account.QuotaWindow{{AccountID: value.ID, Mode: "fast", Remaining: 10, Total: 10, WindowSeconds: 3600, UpdatedAt: now}}); err != nil {
 		t.Fatal(err)
 	}
 	if updated, err := repo.DecrementQuotaWindowBy(ctx, value.ID, "fast", 4, now); err != nil || !updated {
@@ -253,6 +253,9 @@ func TestAccountRepositoryDecrementsQuotaByAmountAtomically(t *testing.T) {
 	}
 	if len(windows[value.ID]) != 1 || windows[value.ID][0].Remaining != 0 {
 		t.Fatalf("quota windows = %#v", windows[value.ID])
+	}
+	if windows[value.ID][0].ResetAt == nil || !windows[value.ID][0].ResetAt.Equal(now.Add(time.Hour)) {
+		t.Fatalf("reset_at = %#v", windows[value.ID][0].ResetAt)
 	}
 }
 

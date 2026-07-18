@@ -24,6 +24,8 @@ type Config struct {
 	BaseURL        string
 	SessionBaseURL string
 	TimeoutSeconds int
+	ToolCall       bool
+	NativeTools    bool
 }
 
 type Adapter struct {
@@ -108,6 +110,7 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 	if !ok {
 		return jsonProviderResponse(http.StatusBadRequest, map[string]any{"error": map[string]any{"type": "invalid_request_error", "message": "Console 模型不存在"}}), nil
 	}
+	cfg := a.config()
 	token, err := a.cipher.Decrypt(request.Credential.EncryptedAccessToken)
 	if err != nil {
 		return nil, err
@@ -121,13 +124,12 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 			body, err = conversation.ConvertRequest(body, request.Model, request.Operation)
 		}
 		if err == nil {
-			body, err = normalizeRequest(body, spec)
+			body, err = normalizeRequest(body, spec, cfg)
 		}
 		if err != nil {
 			return invalidConversationResponse(request.Operation, err), nil
 		}
 	}
-	cfg := a.config()
 	requestCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.TimeoutSeconds)*time.Second)
 	lease, err := a.egress.AcquireCredential(requestCtx, egressdomain.ScopeConsole, request.Credential)
 	if err != nil {

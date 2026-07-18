@@ -1270,23 +1270,57 @@ func (r *AccountRepository) saveQuotaWindows(ctx context.Context, accountID uint
 }
 
 func (r *AccountRepository) DecrementQuotaWindow(ctx context.Context, accountID uint64, mode string, now time.Time) (bool, error) {
-	result := r.db.db.WithContext(ctx).Model(&quotaWindowModel{}).
-		Where("account_id = ? AND mode = ? AND remaining > 0", accountID, mode).
-		Updates(map[string]any{"remaining": gorm.Expr("remaining - 1"), "updated_at": now})
-	return result.RowsAffected == 1, result.Error
+	return r.decrementQuotaWindow(ctx, accountID, mode, 1, now)
 }
 
 func (r *AccountRepository) DecrementQuotaWindowBy(ctx context.Context, accountID uint64, mode string, amount int, now time.Time) (bool, error) {
 	if amount <= 0 {
 		amount = 1
 	}
-	result := r.db.db.WithContext(ctx).Model(&quotaWindowModel{}).
-		Where("account_id = ? AND mode = ? AND remaining > 0", accountID, mode).
-		Updates(map[string]any{
-			"remaining":  gorm.Expr("CASE WHEN remaining <= ? THEN 0 ELSE remaining - ? END", amount, amount),
+	return r.decrementQuotaWindow(ctx, accountID, mode, amount, now)
+}
+
+func (r *AccountRepository) decrementQuotaWindow(ctx context.Context, accountID uint64, mode string, amount int, now time.Time) (bool, error) {
+	if amount <= 0 {
+		amount = 1
+	}
+	updated := false
+	err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var row quotaWindowModel
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("account_id = ? AND mode = ?", accountID, mode).First(&row).Error; err != nil {
+			return err
+		}
+		if row.Remaining <= 0 {
+			return nil
+		}
+		remaining := row.Remaining - amount
+		if remaining < 0 {
+			remaining = 0
+		}
+		updates := map[string]any{
+			"remaining":  remaining,
 			"updated_at": now,
-		})
-	return result.RowsAffected == 1, result.Error
+		}
+		if remaining == 0 {
+			resetAt := row.ResetAt
+			if resetAt == nil && row.WindowSeconds > 0 {
+				value := now.Add(time.Duration(row.WindowSeconds) * time.Second)
+				resetAt = &value
+			}
+			if resetAt != nil {
+				updates["reset_at"] = resetAt
+			}
+		}
+		if err := tx.Model(&quotaWindowModel{}).Where("account_id = ? AND mode = ?", accountID, mode).Updates(updates).Error; err != nil {
+			return err
+		}
+		updated = true
+		return nil
+	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	return updated, err
 }
 
 func (r *AccountRepository) ExhaustQuotaWindow(ctx context.Context, accountID uint64, mode string, resetAt *time.Time, now time.Time) error {

@@ -20,7 +20,7 @@ var (
 	consoleRateLimitModelTrimChars = ".,;"
 )
 
-func normalizeRequest(body []byte, spec ModelSpec) ([]byte, error) {
+func normalizeRequest(body []byte, spec ModelSpec, cfg Config) ([]byte, error) {
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, fmt.Errorf("解析 Console Responses 请求: %w", err)
@@ -43,8 +43,13 @@ func normalizeRequest(body []byte, spec ModelSpec) ([]byte, error) {
 	}
 	normalizeReasoning(payload, spec)
 	ensureReasoningInclude(payload)
+	if !cfg.ToolCall {
+		delete(payload, "tools")
+		delete(payload, "tool_choice")
+		return json.Marshal(payload)
+	}
 	retainedClientTools := normalizeConsoleTools(payload)
-	if spec.SearchTools {
+	if cfg.NativeTools && spec.SearchTools {
 		mergeSearchTools(payload)
 	}
 	normalizeConsoleToolChoice(payload, retainedClientTools)

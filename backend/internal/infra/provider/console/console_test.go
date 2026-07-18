@@ -114,7 +114,7 @@ func TestNormalizeRequestAppliesConsoleContract(t *testing.T) {
 		"metadata":{"private":"value"},
 		"reasoning":{"effort":"xhigh"},
 		"tools":[{"type":"web_search","custom":true},{"type":"function","name":"lookup","parameters":{"type":"object"}}]
-	}`), spec)
+	}`), spec, Config{ToolCall: true, NativeTools: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestNormalizeRequestAppliesConsoleContract(t *testing.T) {
 	if webSearch["custom"] != nil || webSearch["enable_image_understanding"] != true {
 		t.Fatalf("web_search = %#v", webSearch)
 	}
-	stateless, err := normalizeRequest([]byte(`{"model":"grok-4.3","store":true,"previous_response_id":"resp_1","service_tier":"priority","input":"hello"}`), spec)
+	stateless, err := normalizeRequest([]byte(`{"model":"grok-4.3","store":true,"previous_response_id":"resp_1","service_tier":"priority","input":"hello"}`), spec, Config{ToolCall: true, NativeTools: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestNormalizeRequestAppliesConsoleCompatibilityBoundary(t *testing.T) {
 			{"type":"web_search","external_web_access":true}
 		],
 		"tool_choice":"required"
-	}`), spec)
+	}`), spec, Config{ToolCall: true, NativeTools: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,6 +209,57 @@ func TestNormalizeRequestAppliesConsoleCompatibilityBoundary(t *testing.T) {
 	}
 	if tools[0].(map[string]any)["external_web_access"] != nil {
 		t.Fatalf("unsupported web search controls leaked: %#v", tools[0])
+	}
+}
+
+func TestNormalizeRequestDropsToolsWhenToolCallDisabled(t *testing.T) {
+	spec, ok := Resolve("grok-4.3")
+	if !ok {
+		t.Fatal("grok-4.3 missing")
+	}
+	body, err := normalizeRequest([]byte(`{
+		"model":"grok-4.3",
+		"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],
+		"tool_choice":"required"
+	}`), spec, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := payload["tools"]; exists {
+		t.Fatalf("tools leaked when tool call disabled: %#v", payload)
+	}
+	if _, exists := payload["tool_choice"]; exists {
+		t.Fatalf("tool_choice leaked when tool call disabled: %#v", payload)
+	}
+}
+
+func TestNormalizeRequestCanSkipNativeToolInjection(t *testing.T) {
+	spec, ok := Resolve("grok-4.3")
+	if !ok {
+		t.Fatal("grok-4.3 missing")
+	}
+	body, err := normalizeRequest([]byte(`{
+		"model":"grok-4.3",
+		"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],
+		"tool_choice":"required"
+	}`), spec, Config{ToolCall: true, NativeTools: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	tools, _ := payload["tools"].([]any)
+	if len(tools) != 1 || toolIdentity(tools[0]) != "function:lookup" {
+		t.Fatalf("native tools were injected unexpectedly: %#v", tools)
+	}
+	if payload["tool_choice"] != "required" {
+		t.Fatalf("tool_choice = %#v", payload["tool_choice"])
 	}
 }
 
