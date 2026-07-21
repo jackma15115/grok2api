@@ -60,4 +60,4 @@ jobs:
         if: steps.merge.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run .github/workflows/ghcr-image.yml --ref "${TARGET_BRANCH}" -f publish=true
+        run: gh workflow run .github/workflows/ghcr-image.yml --repo "${GITHUB_REPOSITORY}" --ref "${TARGET_BRANCH}" -f publish=true
