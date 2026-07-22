@@ -17,6 +17,29 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # Optional self-hosted Playwright Statsig signer. Configure Grok2API's
+  # Statsig URL mode as http://statsig-signer:8787/sign.
+  statsig-signer:
+    container_name: statsig-signer
+    build:
+      context: ./statsig-signer
+    profiles: ["statsig-signer"]
+    environment:
+      TZ: "${TZ:-Asia/Shanghai}"
+      SIGNER_TARGET_URL: "${SIGNER_TARGET_URL:-https://grok.com/}"
+      SIGNER_COOKIE: "${SIGNER_COOKIE:-}"
+      SIGNER_USER_AGENT: "${SIGNER_USER_AGENT:-}"
+      SIGNER_PROXY_URL: "${SIGNER_PROXY_URL:-}"
+      SIGNER_BROWSER_EXECUTABLE_PATH: "${SIGNER_BROWSER_EXECUTABLE_PATH:-}"
+      SIGNER_REFRESH_INTERVAL_MS: "${SIGNER_REFRESH_INTERVAL_MS:-1800000}"
+    expose:
+      - "8787"
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
   # 如果出口 IP 不干净，可取消以下注释使用 WARP 作为落地代理。
   # 启用后，在管理端“设置 -> 出口代理”中新增 socks5://warp:1080。
   warp:

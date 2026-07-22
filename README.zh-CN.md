@@ -341,6 +341,16 @@ podman compose --profile flaresolverr up -d
 
 随后在管理端打开 **运行设置 → 媒体与网络 → Clearance**，选择 `FlareSolverr`，并将服务地址设为 `http://flaresolverr:8191`。FlareSolverr 不会暴露到宿主机；每个 Web 或 Console 出口节点均使用自身代理获取匹配的 Cookie 与 User-Agent。
 
+### 实验性自托管 Statsig 签名器
+
+仓库包含一个 Playwright 驱动的实验性 Statsig 签名服务。它使用真实 Grok 页面校准 `seed/HEX`，通过浏览器样本校验后再提供兼容的 `/sign` 接口：
+
+```bash
+docker compose --profile statsig-signer up -d --build
+```
+
+随后在管理端将 Statsig 模式设为 `URL`，地址填写 `http://statsig-signer:8787/sign`。如果 Grok 页面要求 Cloudflare challenge，需要通过 `SIGNER_COOKIE`、`SIGNER_USER_AGENT` 和 `SIGNER_PROXY_URL` 提供匹配的浏览器出口。完整说明见 [statsig-signer/README.md](statsig-signer/README.md)。
+
 ### Resin 粘性代理
 
 出口代理用户名支持 `{account}` 占位符：
