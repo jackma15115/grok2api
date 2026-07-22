@@ -358,6 +358,8 @@ Then open **Runtime Settings → Media & Network → Clearance**, select `FlareS
 
 The repository includes a Playwright-backed experimental Statsig signer. It calibrates against a real Grok page, verifies a browser-generated sample, and then exposes a compatible `/sign` endpoint:
 
+The built-in `Local` mode uses a captured material snapshot and can stop working when Grok rotates that material. For long-running deployments, use the `URL` signer mode so Playwright can recalibrate automatically.
+
 ```bash
 docker compose -f docker-compose.all.yml up -d
 ```

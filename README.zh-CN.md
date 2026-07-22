@@ -359,6 +359,8 @@ podman compose -f docker-compose.warp-flaresolverr.yml up -d
 
 仓库包含一个 Playwright 驱动的实验性 Statsig 签名服务。它使用真实 Grok 页面校准 `seed/HEX`，通过浏览器样本校验后再提供兼容的 `/sign` 接口：
 
+内置 `Local` 模式使用抓包材料快照，Grok 轮换材料后可能失效。长期运行的部署应使用 `URL` 签名模式，由 Playwright 自动重新校准。
+
 ```bash
 docker compose -f docker-compose.all.yml up -d
 ```

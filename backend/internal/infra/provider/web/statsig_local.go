@@ -17,8 +17,8 @@ const (
 	statsigMark      = 0x03
 
 	// Captured from a browser and cross-checked against Grok's 70-byte output.
-	localStatsigSeedBase64 = "t2ODAFY4ozXd0K2Y8MdI2XfxTDiJoakZPuoaKfcQn8VuasZMcKliyhA1pJ+o1oMf"
-	localStatsigHEX        = "3bab9506b851eb851eb840e8f5c28f5c28f80e8f5c28f5c28f806b851eb851eb8400"
+	localStatsigSeedBase64 = "sNxHIO54yYnP4770Z9D4ziLsj1lk1iNZq3sn/FXhB53gt7pcrjvVTZUsqWyls+ON"
+	localStatsigHEX        = "6c2b600ee147ae147ae1805c28f5c28f5c2805c28f5c28f5c280ee147ae147ae1800"
 )
 
 var localStatsigSeed = mustDecodeLocalStatsigSeed(localStatsigSeedBase64)
