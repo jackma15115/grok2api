@@ -1,5 +1,7 @@
 # Self-hosted Statsig signer
 
+English | [简体中文](README.zh-CN.md)
+
 This service is a Playwright-backed replacement for `https://grok.wodf.de/sign`.
 It keeps a real Grok page open during calibration, captures one browser-generated
 `x-statsig-id`, verifies the embedded seed and SHA input byte-for-byte, then uses
@@ -34,13 +36,20 @@ configured.
 
 ## Compose
 
-Start the published signer and its FlareSolverr dependency from the repository root:
+Run it with Grok2API, WARP, and FlareSolverr from the repository root:
 
 ```powershell
-docker compose --profile statsig-signer up -d
+docker compose -f docker-compose.all.yml up -d
 ```
 
-The default image is `ghcr.io/chenyme/grok2api-statsig-signer:latest`. Set
+Run it as a standalone public signer without the Grok2API service:
+
+```powershell
+docker compose -f docker-compose.statsig-signer.yml up -d
+```
+
+The standalone endpoint is `http://HOST:8787/sign`. The default image is
+`ghcr.io/jackma15115/grok2api-statsig-signer:latest`. Set
 `STATSIG_SIGNER_IMAGE` to use a fork or a pinned release tag.
 
 In Grok2API settings select the URL Statsig mode and set:
@@ -49,8 +58,9 @@ In Grok2API settings select the URL Statsig mode and set:
 http://statsig-signer:8787/sign
 ```
 
-The signer has no host port by default. Keep it on the Compose network unless a
-separate access-control layer protects it.
+The all-in-one Compose file keeps the signer on the internal network. The
+standalone file publishes port `8787`; protect public deployments with a reverse
+proxy, rate limiting, and an allowlist where possible.
 
 ## Calibration environment
 

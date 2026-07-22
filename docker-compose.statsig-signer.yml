@@ -1,0 +1,41 @@
+name: grok2api-statsig-signer
+
+services:
+  statsig-signer:
+    container_name: statsig-signer
+    image: "${STATSIG_SIGNER_IMAGE:-ghcr.io/jackma15115/grok2api-statsig-signer:latest}"
+    depends_on:
+      flaresolverr:
+        condition: service_healthy
+    ports:
+      - "${STATSIG_SIGNER_PORT:-8787}:8787"
+    environment:
+      TZ: "${TZ:-Asia/Shanghai}"
+      SIGNER_TARGET_URL: "${SIGNER_TARGET_URL:-https://grok.com/}"
+      SIGNER_FLARESOLVERR_URL: "${SIGNER_FLARESOLVERR_URL:-http://flaresolverr:8191}"
+      SIGNER_FLARESOLVERR_TIMEOUT_MS: "${SIGNER_FLARESOLVERR_TIMEOUT_MS:-60000}"
+      SIGNER_COOKIE: "${SIGNER_COOKIE:-}"
+      SIGNER_USER_AGENT: "${SIGNER_USER_AGENT:-}"
+      SIGNER_PROXY_URL: "${SIGNER_PROXY_URL:-}"
+      SIGNER_BROWSER_EXECUTABLE_PATH: "${SIGNER_BROWSER_EXECUTABLE_PATH:-}"
+      SIGNER_REFRESH_INTERVAL_MS: "${SIGNER_REFRESH_INTERVAL_MS:-1800000}"
+      SIGNER_API_TOKEN: "${SIGNER_API_TOKEN:-}"
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+  flaresolverr:
+    container_name: flaresolverr
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    environment:
+      TZ: "${TZ:-Asia/Shanghai}"
+      LOG_LEVEL: "${FLARESOLVERR_LOG_LEVEL:-info}"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8191/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
