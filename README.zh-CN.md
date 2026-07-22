@@ -212,6 +212,17 @@ pnpm dev
 
 管理员创建成功后，建议修改密码并从配置中删除 `bootstrapAdmin`。`credentialEncryptionKey` 必须长期保留，更换后已有凭据将无法解密。
 
+### 从 Python 版迁移账号
+
+可以迁移 Python 版使用的 **Grok Web SSO Token**，但不能直接导入旧数据库或原始号池 JSON。请先从 Python v2 管理页导出 **TXT（每行一个 Token）**，或自行从旧存储中提取裸 SSO Token；然后在 Go 版 `/accounts` 的 **Grok Web** 页签选择“连接账号”→“快速导入 SSO”或“导入账号文件”。
+
+Go 版 Web 导入支持以下格式：
+
+- TXT：每行一个裸 Token，也接受 `sso=<token>` 或 `sso=<token>; ...`
+- JSON：`{"provider":"grok_web","accounts":[{"sso_token":"...","name":"可选","tier":"auto|basic|super|heavy"}]}`
+
+Python 版的 pool、标签、状态、额度、使用统计、冷却、代理/Cloudflare 配置等元数据不会迁移；TXT 导入时等级按 `auto` 重新同步。Python 版不含 Grok Build OAuth 凭据，因此不能将其号池导入 Go 版的 **Grok Build** 页签。单次最多 1,000 个文件、总计 30 MiB / 10,000 个账号；导入后请等待身份、额度和模型能力同步完成。
+
 ## 模型与路由
 
 公开模型名默认不带来源前缀。内部使用 `Build/`、`Web/`、`Console/` 作为稳定路由 ID；带前缀名称仍可用于显式指定来源，但不会作为普通模型名展示。
@@ -352,6 +363,12 @@ socks5h://Default.{account}:RESIN_PROXY_TOKEN@resin:2260
 运行时会将占位符替换为稳定、匿名的账号身份。已关联的 Web、Build、Console 可以复用同一身份；未关联账号继续使用各自的回退身份。身份不会因为 Token 续期而变化。
 
 出口层只对明确发生在请求提交前的连接错误执行有限重试。已经提交的生成请求、认证失败、额度耗尽和上游限流不会在出口层自动重放。
+
+### 代理运营与账号调配
+
+管理端可从加密保存的 HTTP(S) 订阅源或粘贴的明文/Base64 文本导入 HTTP/SOCKS 代理列表。代理探测会记录可用状态、延迟和出口 IP，但不会暴露代理凭据或订阅地址。
+
+账号可批量显式绑定到一个已启用的代理节点。自动调配只使用近期探测可用的节点，遵守节点可选的账号容量，并在容量充足时均衡自动分配的账号；手工绑定不会被自动均衡迁移。
 
 ## 安全与生产建议
 
