@@ -15,6 +15,9 @@ const seed = new Uint8Array(${JSON.stringify(seed)});
 const hex = ${JSON.stringify(hex)};
 const originalFetch = window.fetch.bind(window);
 window.fetch = async function(input, init = {}) {
+  if (!document.cookie.includes("cf_clearance=clear") || !navigator.userAgent.includes("Chrome/146")) {
+    return originalFetch(input, init);
+  }
   const url = new URL(input, location.href);
   const method = String(init.method || "GET").toUpperCase();
   const number = Math.floor(Date.now() / 1000) - 1682924400;
@@ -40,6 +43,16 @@ window.fetch = async function(input, init = {}) {
 
 test("calibrates from a browser request and matching Web Crypto input", { skip: !executablePath }, async () => {
   const server = http.createServer((req, res) => {
+    if (req.url === "/v1" && req.method === "POST") {
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({
+        status: "ok",
+        solution: {
+          userAgent: "Mozilla/5.0 Chrome/146.0.0.0 Safari/537.36",
+          cookies: [{ name: "cf_clearance", value: "clear" }],
+        },
+      }));
+    }
     if (req.url === "/") {
       res.writeHead(200, { "content-type": "text/html" });
       return res.end(fixtureHTML);
@@ -53,13 +66,14 @@ test("calibrates from a browser request and matching Web Crypto input", { skip: 
   });
   const targetURL = `http://127.0.0.1:${server.address().port}/`;
   try {
-    const calibrator = new BrowserCalibrator({ targetURL, executablePath, timeoutMs: 10_000, settleMs: 100 });
+    const calibrator = new BrowserCalibrator({ targetURL, flareSolverrURL: targetURL, executablePath, timeoutMs: 10_000, settleMs: 100 });
     const material = await calibrator.refresh();
     assert.equal(calibrator.status().lastError, null);
     assert.equal(material.seed, seedBase64);
     assert.equal(material.hex, hex);
     assert.equal(material.capturedMethod, "POST");
     assert.equal(material.capturedPath, "/rest/rate-limits");
+    assert.equal(calibrator.status().clearanceSource, "flaresolverr");
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

@@ -1,5 +1,6 @@
 import { chromium } from "playwright";
 
+import { solveFlareSolverr } from "./flaresolverr.mjs";
 import { extractMaterialFromCapture, materialFromConfig } from "./statsig.mjs";
 
 const DEFAULT_TARGET_URL = "https://grok.com/";
@@ -38,6 +39,20 @@ function cookiesFromHeader(value, targetURL) {
   });
 }
 
+function mergeCookieHeaders(...headers) {
+  const values = new Map();
+  for (const header of headers) {
+    for (const part of String(header ?? "").split(";")) {
+      const separator = part.indexOf("=");
+      if (separator <= 0) continue;
+      const name = part.slice(0, separator).trim();
+      const value = part.slice(separator + 1).trim();
+      if (name && value) values.set(name, value);
+    }
+  }
+  return [...values].map(([name, value]) => `${name}=${value}`).join("; ");
+}
+
 function createDeferred() {
   let resolve;
   const promise = new Promise((nextResolve) => { resolve = nextResolve; });
@@ -53,11 +68,13 @@ export class BrowserCalibrator {
     this.cookieHeader = options.cookieHeader ?? process.env.SIGNER_COOKIE ?? "";
     this.proxyURL = options.proxyURL ?? process.env.SIGNER_PROXY_URL ?? "";
     this.executablePath = options.executablePath ?? process.env.SIGNER_BROWSER_EXECUTABLE_PATH ?? "";
+    this.flareSolverrURL = options.flareSolverrURL ?? process.env.SIGNER_FLARESOLVERR_URL ?? "";
+    this.flareSolverrTimeoutMs = options.flareSolverrTimeoutMs ?? Number(process.env.SIGNER_FLARESOLVERR_TIMEOUT_MS ?? 60_000);
     this.headless = options.headless ?? process.env.SIGNER_HEADLESS !== "false";
     this.timeoutMs = options.timeoutMs ?? Number(process.env.SIGNER_BROWSER_TIMEOUT_MS ?? 45000);
     this.settleMs = options.settleMs ?? Number(process.env.SIGNER_PAGE_SETTLE_MS ?? 5000);
     this.material = null;
-    this.state = { source: null, refreshInFlight: false, lastError: null };
+    this.state = { source: null, clearanceSource: this.cookieHeader ? "configured" : null, refreshInFlight: false, lastError: null };
     this.refreshPromise = null;
     this.fallback = null;
     if (process.env.SIGNER_FALLBACK_SEED && process.env.SIGNER_FALLBACK_HEX) {
@@ -89,6 +106,21 @@ export class BrowserCalibrator {
     let browser;
     let context;
     try {
+      let cookieHeader = this.cookieHeader;
+      let userAgent = this.userAgent;
+      if (this.flareSolverrURL) {
+        const solution = await solveFlareSolverr({
+          baseURL: this.flareSolverrURL,
+          targetURL: this.targetURL,
+          proxyURL: this.proxyURL,
+          timeoutMs: this.flareSolverrTimeoutMs,
+        });
+        cookieHeader = mergeCookieHeaders(cookieHeader, solution.cookieHeader);
+        userAgent = solution.userAgent;
+        this.state.clearanceSource = "flaresolverr";
+      } else {
+        this.state.clearanceSource = cookieHeader ? "configured" : null;
+      }
       browser = await chromium.launch({
         headless: this.headless,
         proxy: parseProxy(this.proxyURL),
@@ -96,7 +128,7 @@ export class BrowserCalibrator {
         args: ["--disable-dev-shm-usage"],
       });
       context = await browser.newContext({
-        ...(this.userAgent ? { userAgent: this.userAgent } : {}),
+        ...(userAgent ? { userAgent } : {}),
         locale: "en-US",
       });
       const digestInputs = [];
@@ -134,7 +166,7 @@ export class BrowserCalibrator {
           }
         })();`,
       });
-      const cookies = cookiesFromHeader(this.cookieHeader, this.targetURL);
+      const cookies = cookiesFromHeader(cookieHeader, this.targetURL);
       if (cookies.length) await context.addCookies(cookies);
       const page = await context.newPage();
       const observed = [];

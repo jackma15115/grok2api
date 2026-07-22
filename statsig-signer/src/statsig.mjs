@@ -151,6 +151,7 @@ export function publicMaterialStatus(material, state = {}) {
     capturedAt: material?.capturedAt ?? null,
     capturedMethod: material?.capturedMethod ?? null,
     capturedPath: material?.capturedPath ?? null,
+    clearanceSource: state.clearanceSource ?? null,
     refreshInFlight: Boolean(state.refreshInFlight),
     lastError: state.lastError ?? null,
   };

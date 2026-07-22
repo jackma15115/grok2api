@@ -34,11 +34,14 @@ configured.
 
 ## Compose
 
-Start the service from the repository root:
+Start the published signer and its FlareSolverr dependency from the repository root:
 
 ```powershell
-docker compose --profile statsig-signer up -d --build statsig-signer
+docker compose --profile statsig-signer up -d
 ```
+
+The default image is `ghcr.io/chenyme/grok2api-statsig-signer:latest`. Set
+`STATSIG_SIGNER_IMAGE` to use a fork or a pinned release tag.
 
 In Grok2API settings select the URL Statsig mode and set:
 
@@ -54,6 +57,8 @@ separate access-control layer protects it.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SIGNER_TARGET_URL` | `https://grok.com/` | Page used for calibration |
+| `SIGNER_FLARESOLVERR_URL` | empty outside Compose | Solve Cloudflare before launching Playwright |
+| `SIGNER_FLARESOLVERR_TIMEOUT_MS` | `60000` | FlareSolverr solve timeout |
 | `SIGNER_PROBE_PATH` | `/rest/rate-limits` | Aborted fetch used to trigger the page interceptor |
 | `SIGNER_COOKIE` | empty | Optional browser Cookie header for Cloudflare/session access |
 | `SIGNER_USER_AGENT` | Playwright default | Match the UA used to obtain `SIGNER_COOKIE` |
@@ -67,10 +72,15 @@ The current Grok2API URL signer client does not send an Authorization header,
 so leave `SIGNER_API_TOKEN` empty when connecting it directly. Use the token
 only behind a client or reverse proxy that adds the header.
 
-If Grok or the signer host presents a Cloudflare challenge, calibration will
-fail and `/healthz` will remain `503`. The cookie, UA, and proxy must describe
-the same browser egress. The service deliberately does not treat a random
-70-byte value as ready.
+When FlareSolverr is configured, the signer first requests a solved Grok page
+using the same `SIGNER_PROXY_URL`, then injects the returned cookies and
+User-Agent into Playwright. FlareSolverr cannot run the Statsig SHA hook itself,
+so Playwright is still required for the final browser capture. If the two
+containers do not share the same public egress, Cloudflare may reject the
+transferred clearance.
+
+If calibration still fails, `/healthz` remains `503`. The service deliberately
+does not treat a random 70-byte value as ready.
 
 ## Tests
 

@@ -345,10 +345,10 @@ Then open **Runtime Settings → Media & Network → Clearance**, select `FlareS
 The repository includes a Playwright-backed experimental Statsig signer. It calibrates against a real Grok page, verifies a browser-generated sample, and then exposes a compatible `/sign` endpoint:
 
 ```bash
-docker compose --profile statsig-signer up -d --build
+docker compose --profile statsig-signer up -d
 ```
 
-Set the Statsig mode to `URL` and use `http://statsig-signer:8787/sign`. If Grok presents a Cloudflare challenge, provide a matching browser egress with `SIGNER_COOKIE`, `SIGNER_USER_AGENT`, and `SIGNER_PROXY_URL`. See [statsig-signer/README.md](statsig-signer/README.md) for the full configuration.
+This profile starts both the published signer image and FlareSolverr. The signer obtains matching cookies and User-Agent from FlareSolverr before Playwright performs the Statsig capture. Set the Statsig mode to `URL` and use `http://statsig-signer:8787/sign`. See [statsig-signer/README.md](statsig-signer/README.md) for the full configuration.
 
 ### Resin sticky proxies
 

@@ -346,10 +346,10 @@ podman compose --profile flaresolverr up -d
 仓库包含一个 Playwright 驱动的实验性 Statsig 签名服务。它使用真实 Grok 页面校准 `seed/HEX`，通过浏览器样本校验后再提供兼容的 `/sign` 接口：
 
 ```bash
-docker compose --profile statsig-signer up -d --build
+docker compose --profile statsig-signer up -d
 ```
 
-随后在管理端将 Statsig 模式设为 `URL`，地址填写 `http://statsig-signer:8787/sign`。如果 Grok 页面要求 Cloudflare challenge，需要通过 `SIGNER_COOKIE`、`SIGNER_USER_AGENT` 和 `SIGNER_PROXY_URL` 提供匹配的浏览器出口。完整说明见 [statsig-signer/README.md](statsig-signer/README.md)。
+该 profile 会同时启动已发布的 signer 镜像与 FlareSolverr。signer 先从 FlareSolverr 获取匹配的 Cookie 和 User-Agent，再由 Playwright 完成 Statsig 捕获。随后在管理端将 Statsig 模式设为 `URL`，地址填写 `http://statsig-signer:8787/sign`。完整说明见 [statsig-signer/README.md](statsig-signer/README.md)。
 
 ### Resin 粘性代理
 

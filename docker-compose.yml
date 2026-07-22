@@ -21,12 +21,16 @@ services:
   # Statsig URL mode as http://statsig-signer:8787/sign.
   statsig-signer:
     container_name: statsig-signer
-    build:
-      context: ./statsig-signer
+    image: "${STATSIG_SIGNER_IMAGE:-ghcr.io/chenyme/grok2api-statsig-signer:latest}"
     profiles: ["statsig-signer"]
+    depends_on:
+      flaresolverr:
+        condition: service_healthy
     environment:
       TZ: "${TZ:-Asia/Shanghai}"
       SIGNER_TARGET_URL: "${SIGNER_TARGET_URL:-https://grok.com/}"
+      SIGNER_FLARESOLVERR_URL: "${SIGNER_FLARESOLVERR_URL:-http://flaresolverr:8191}"
+      SIGNER_FLARESOLVERR_TIMEOUT_MS: "${SIGNER_FLARESOLVERR_TIMEOUT_MS:-60000}"
       SIGNER_COOKIE: "${SIGNER_COOKIE:-}"
       SIGNER_USER_AGENT: "${SIGNER_USER_AGENT:-}"
       SIGNER_PROXY_URL: "${SIGNER_PROXY_URL:-}"
@@ -60,10 +64,16 @@ services:
   flaresolverr:
     container_name: flaresolverr
     image: ghcr.io/flaresolverr/flaresolverr:latest
-    profiles: ["flaresolverr"]
+    profiles: ["flaresolverr", "statsig-signer"]
     environment:
       TZ: Asia/Shanghai
       LOG_LEVEL: info
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8191/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
     restart: unless-stopped
 
 volumes:
