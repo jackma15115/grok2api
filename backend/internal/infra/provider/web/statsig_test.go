@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 )
 
@@ -226,6 +227,26 @@ func TestApplySignedStatsigUsesManualValue(t *testing.T) {
 	}
 }
 
+func TestApplySignedStatsigUsesLocalGenerator(t *testing.T) {
+	adapter := &Adapter{cfg: Config{BaseURL: "https://grok.com", StatsigMode: statsigModeLocal}}
+	request, err := http.NewRequest(http.MethodPost, "https://grok.com/rest/app-chat/conversations/new", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.applySignedStatsig(context.Background(), request, "", nil)
+	decoded, err := base64.RawStdEncoding.DecodeString(request.Header.Get("x-statsig-id"))
+	if err != nil || len(decoded) != 70 {
+		t.Fatalf("local x-statsig-id decoded length = %d, err = %v", len(decoded), err)
+	}
+}
+
+func TestWarmStatsigLocalModeNeedsNoAccountEgress(t *testing.T) {
+	adapter := &Adapter{cfg: Config{StatsigMode: statsigModeLocal}}
+	if warmed, err := adapter.WarmStatsig(context.Background(), account.Credential{}); err != nil || warmed != 0 {
+		t.Fatalf("warmed = %d, err = %v", warmed, err)
+	}
+}
+
 func TestStatsigInvalidationDoesNotReuseRejectedValue(t *testing.T) {
 	now := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
 	raw := make([]byte, 70)
@@ -265,6 +286,10 @@ func TestStatsigInvalidationOnlyAppliesToURLMode(t *testing.T) {
 	manual := &Adapter{cfg: Config{StatsigMode: "manual"}, statsig: newStatsigSigner()}
 	if manual.invalidateSignedStatsig(http.MethodPost, "https://grok.com/rest/test") {
 		t.Fatal("manual Statsig must not be invalidated automatically")
+	}
+	local := &Adapter{cfg: Config{StatsigMode: statsigModeLocal}, statsig: newStatsigSigner()}
+	if local.invalidateSignedStatsig(http.MethodPost, "https://grok.com/rest/test") {
+		t.Fatal("local Statsig must not mutate the URL signer cache")
 	}
 	urlMode := &Adapter{cfg: Config{BaseURL: "https://grok.com", StatsigMode: "url", StatsigSignerURL: "https://signer.example/sign"}, statsig: newStatsigSigner()}
 	if !urlMode.invalidateSignedStatsig(http.MethodPost, "https://grok.com/rest/test") {

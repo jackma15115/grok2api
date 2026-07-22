@@ -5,6 +5,8 @@ const resources = {
   "zh-CN": {
     translation: {
       appName: "Grok2API",
+      statsigLocalMode: "本地生成",
+      statsigLocalModeHelp: "按请求在本机生成 x-statsig-id，无需外部签名服务；Grok 更新风控资产后可能需要升级。",
       webAccountSettings: {
         menu: "账号设置",
         acceptTerms: "接受服务协议",
@@ -992,6 +994,8 @@ const resources = {
   en: {
     translation: {
       appName: "Grok2API",
+      statsigLocalMode: "Local",
+      statsigLocalModeHelp: "Generate x-statsig-id locally without an external signer; Grok anti-bot asset changes may require an upgrade.",
       webAccountSettings: {
         menu: "Account settings",
         acceptTerms: "Accept terms",

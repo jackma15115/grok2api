@@ -375,6 +375,15 @@ func (a *Adapter) applySignedStatsig(ctx context.Context, request *http.Request,
 		}
 		return
 	}
+	if cfg.StatsigMode == statsigModeLocal {
+		value, err := generateLocalStatsig(request.URL.EscapedPath(), request.Method, time.Now())
+		if err != nil {
+			a.log().Warn("web_statsig_local_generation_failed", "method", request.Method, "path", request.URL.EscapedPath(), "error", err)
+			return
+		}
+		request.Header.Set("x-statsig-id", value)
+		return
+	}
 	if a.statsig == nil {
 		return
 	}
@@ -397,6 +406,12 @@ func (a *Adapter) WarmStatsig(ctx context.Context, credential account.Credential
 	if cfg.StatsigMode == "manual" {
 		if !validStatsigID(strings.TrimSpace(cfg.StatsigManualValue)) {
 			return 0, fmt.Errorf("手动 Statsig 配置无效")
+		}
+		return 0, nil
+	}
+	if cfg.StatsigMode == statsigModeLocal {
+		if _, err := generateLocalStatsig("/rest/app-chat/conversations/new", http.MethodPost, time.Now()); err != nil {
+			return 0, fmt.Errorf("本地 Statsig 生成失败: %w", err)
 		}
 		return 0, nil
 	}

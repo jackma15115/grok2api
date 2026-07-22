@@ -19,6 +19,7 @@ import (
 
 const (
 	StatsigModeManual             = "manual"
+	StatsigModeLocal              = "local"
 	StatsigModeURL                = "url"
 	ClearanceModeManual           = "manual"
 	ClearanceModeFlareSolverr     = "flaresolverr"
@@ -429,12 +430,13 @@ func (c Config) Validate() error {
 		if !validStatsigID(c.Provider.Web.StatsigManualValue) {
 			return errors.New("provider.web 手动 x-statsig-id 格式无效")
 		}
+	case StatsigModeLocal:
 	case StatsigModeURL:
 		if err := signerurl.Validate(c.Provider.Web.StatsigSignerURL); err != nil {
 			return fmt.Errorf("provider.web Statsig 签名 URL 无效: %w", err)
 		}
 	default:
-		return errors.New("provider.web Statsig 模式必须是 manual 或 url")
+		return errors.New("provider.web Statsig 模式必须是 manual、local 或 url")
 	}
 	switch c.Provider.Web.ClearanceMode {
 	case ClearanceModeManual:

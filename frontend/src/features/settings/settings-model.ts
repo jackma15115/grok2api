@@ -49,7 +49,7 @@ export const settingsSchema = z.object({
   }),
   providerWeb: z.object({
     baseURL: z.url().refine((value) => value.startsWith("https://")),
-    statsigMode: z.enum(["manual", "url"]),
+    statsigMode: z.enum(["manual", "local", "url"]),
     statsigManualValue: z.string().trim().max(4096),
     statsigManualConfigured: z.boolean(),
     statsigSignerURL: z.string().trim().max(2048),

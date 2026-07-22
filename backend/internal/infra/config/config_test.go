@@ -241,6 +241,12 @@ func TestValidateStatsigModes(t *testing.T) {
 		t.Fatal("invalid manual Statsig was accepted")
 	}
 
+	local := base
+	local.Provider.Web.StatsigMode = StatsigModeLocal
+	if err := local.Validate(); err != nil {
+		t.Fatalf("local Statsig mode rejected: %v", err)
+	}
+
 	remote := base
 	remote.Provider.Web.StatsigMode = StatsigModeURL
 	remote.Provider.Web.StatsigSignerURL = "http://grok-signer-go:8788/sign"
