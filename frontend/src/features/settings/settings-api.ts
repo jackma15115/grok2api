@@ -1,10 +1,10 @@
 import { apiRequest } from "@/shared/api/client";
-import { createObjectDecoder, decodeBooleanResult, hasShape, isArrayOf, isBoolean, isNumber, isOneOf, isOptional, isString } from "@/shared/api/decoder";
+import { createObjectDecoder, decodeBooleanResult, hasShape, isArrayOf, isBoolean, isNumber, isOneOf, isOptional, isRecordOf, isString } from "@/shared/api/decoder";
 import type { SortOrder } from "@/shared/lib/table-sort";
 
 export type SettingsConfigDTO = {
   server: { maxConcurrentRequests: number };
-  providerBuild: { baseURL: string; fallbackBaseURL: string; clientVersion: string; clientIdentifier: string; tokenAuth: string; tokenAuthConfigured: boolean; userAgent: string };
+  providerBuild: { baseURL: string; fallbackBaseURL: string; clientVersion: string; clientIdentifier: string; tokenAuth: string; tokenAuthConfigured: boolean; userAgent: string; responseHeaderTimeout: string };
   providerWeb: {
     baseURL: string; quotaTimeout: string; chatTimeout: string; imageTimeout: string; videoTimeout: string;
     statsigMode: "manual" | "local" | "url"; statsigManualValue?: string; statsigManualConfigured: boolean; statsigSignerURL: string;
@@ -19,8 +19,11 @@ export type SettingsConfigDTO = {
     cleanupInterval: string;
   };
   frontend: { publicApiBaseURL: string };
-  routing: { stickyTTL: string; cooldownBase: string; cooldownMax: string; capacityWait: string; maxAttempts: number; preferFreeBuild: boolean };
-  audit: { bufferSize: number; batchSize: number; flushInterval: string };
+  routing: {
+    stickyTTL: string; cooldownBase: string; cooldownMax: string; capacityWait: string; maxAttempts: number; preferFreeBuild: boolean;
+    segmentedSelector: { enabled: boolean; minCandidates: number; windowSize: number };
+  };
+  audit: { bufferSize: number; batchSize: number; flushInterval: string; commitDelayMS: number };
   clientKeyDefaults: { rpmLimit: number; maxConcurrent: number };
   accounts: {
     autoCleanReauthEnabled: boolean;
@@ -45,6 +48,8 @@ export type EgressNodeInput = {
 };
 
 export type EgressScope = "grok_build" | "grok_web" | "grok_console" | "grok_web_asset";
+export type EgressFallbackMode = "none" | "direct" | "fixed";
+export type EgressFallbackConfigDTO = { mode: EgressFallbackMode; nodeId?: string };
 export type EgressNodeListDTO = { items: EgressNodeDTO[]; defaultUserAgents: Record<EgressScope, string> };
 export type EgressSourceDTO = {
   id: string; name: string; scope: EgressScope; enabled: boolean; urlConfigured: boolean;
@@ -57,7 +62,7 @@ export type EgressSourceInput = {
 };
 export type EgressOperationsConfigDTO = {
   probeIntervalSeconds: number; autoAssignEnabled: boolean; autoBalanceEnabled: boolean;
-  assignmentIntervalSeconds: number; updatedAt: string;
+  assignmentIntervalSeconds: number; fallbacks: Record<EgressScope, EgressFallbackConfigDTO>; updatedAt: string;
 };
 export type EgressImportResultDTO = { imported: number; skipped: number };
 export type EgressProbeResultDTO = { status: "unknown" | "healthy" | "unhealthy"; testedAt: string; latencyMs: number; exitIp?: string; error?: string };
@@ -74,7 +79,7 @@ export type SettingsSnapshotDTO = {
 
 const settingsConfigValidator = hasShape({
   server: hasShape({ maxConcurrentRequests: isNumber }),
-  providerBuild: hasShape({ baseURL: isString, fallbackBaseURL: isString, clientVersion: isString, clientIdentifier: isString, tokenAuth: isString, tokenAuthConfigured: isBoolean, userAgent: isString }),
+  providerBuild: hasShape({ baseURL: isString, fallbackBaseURL: isString, clientVersion: isString, clientIdentifier: isString, tokenAuth: isString, tokenAuthConfigured: isBoolean, userAgent: isString, responseHeaderTimeout: isString }),
   providerWeb: hasShape({
     baseURL: isString, quotaTimeout: isString, chatTimeout: isString, imageTimeout: isString, videoTimeout: isString,
     statsigMode: isOneOf("manual", "local", "url"), statsigManualValue: isOptional(isString), statsigManualConfigured: isBoolean,
@@ -85,8 +90,11 @@ const settingsConfigValidator = hasShape({
   batch: hasShape({ importConcurrency: isNumber, conversionConcurrency: isNumber, syncConcurrency: isNumber, refreshConcurrency: isNumber, randomDelay: isString }),
   media: hasShape({ maxImageBytes: isNumber, maxTotalBytes: isNumber, cleanupThresholdPercent: isNumber, cleanupInterval: isString }),
   frontend: hasShape({ publicApiBaseURL: isString }),
-  routing: hasShape({ stickyTTL: isString, cooldownBase: isString, cooldownMax: isString, capacityWait: isString, maxAttempts: isNumber, preferFreeBuild: isBoolean }),
-  audit: hasShape({ bufferSize: isNumber, batchSize: isNumber, flushInterval: isString }),
+  routing: hasShape({
+    stickyTTL: isString, cooldownBase: isString, cooldownMax: isString, capacityWait: isString, maxAttempts: isNumber, preferFreeBuild: isBoolean,
+    segmentedSelector: isOptional(hasShape({ enabled: isBoolean, minCandidates: isNumber, windowSize: isNumber })),
+  }),
+  audit: hasShape({ bufferSize: isNumber, batchSize: isNumber, flushInterval: isString, commitDelayMS: isOptional(isNumber) }),
   clientKeyDefaults: hasShape({ rpmLimit: isNumber, maxConcurrent: isNumber }),
   // 旧后端可无 accounts；decode 后由 withAccountsDefaults 补默认关闭策略。
   accounts: isOptional(hasShape({
@@ -102,12 +110,25 @@ const defaultAccountsConfig = (): SettingsConfigDTO["accounts"] => ({
   autoCleanReauthMinAge: "1h",
   autoCleanIncludeDisabled: false,
 });
-function withAccountsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDTO {
+function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDTO {
   const accounts = snapshot.config.accounts ?? defaultAccountsConfig();
+  const segmentedSelector = snapshot.config.routing.segmentedSelector ?? { enabled: false, minCandidates: 3000, windowSize: 64 };
   return {
     ...snapshot,
     config: {
       ...snapshot.config,
+      audit: {
+        ...snapshot.config.audit,
+        commitDelayMS: snapshot.config.audit.commitDelayMS ?? 5,
+      },
+      routing: {
+        ...snapshot.config.routing,
+        segmentedSelector: {
+          enabled: segmentedSelector.enabled ?? false,
+          minCandidates: segmentedSelector.minCandidates || 3000,
+          windowSize: segmentedSelector.windowSize || 64,
+        },
+      },
       accounts: {
         autoCleanReauthEnabled: accounts.autoCleanReauthEnabled ?? false,
         autoCleanReauthInterval: accounts.autoCleanReauthInterval || "10m",
@@ -124,7 +145,7 @@ const decodeSettingsSnapshotRaw = createObjectDecoder<SettingsSnapshotDTO>("sett
   revision: isString,
   restartRequired: isArrayOf(isString),
 });
-const decodeSettingsSnapshot = (value: unknown) => withAccountsDefaults(decodeSettingsSnapshotRaw(value));
+const decodeSettingsSnapshot = (value: unknown) => withSettingsDefaults(decodeSettingsSnapshotRaw(value));
 const egressNodeValidator = hasShape({
 	id: isString, name: isString, scope: isOneOf("grok_build", "grok_web", "grok_console", "grok_web_asset"), enabled: isBoolean,
 	proxyConfigured: isBoolean, userAgent: isString, cookieConfigured: isBoolean, accountBoundProxy: isBoolean, proxyPool: isBoolean, health: isNumber, failureCount: isNumber,
@@ -157,8 +178,10 @@ const decodeEgressSourceList = createObjectDecoder<{ items: EgressSourceDTO[] }>
 const decodeEgressImportResult = createObjectDecoder<EgressImportResultDTO>("egress import result", { imported: isNumber, skipped: isNumber });
 const decodeEgressProbeBatchResult = createObjectDecoder<EgressProbeBatchResultDTO>("egress probe result", { requested: isNumber, healthy: isNumber, unhealthy: isNumber });
 const decodeEgressRebalanceResult = createObjectDecoder<EgressRebalanceResultDTO>("egress rebalance result", { assigned: isNumber, rebalanced: isNumber, unplaced: isNumber });
+const egressFallbackConfigValidator = hasShape({ mode: isOneOf("none", "direct", "fixed"), nodeId: isOptional(isString) });
 const decodeEgressOperationsConfig = createObjectDecoder<EgressOperationsConfigDTO>("egress operations config", {
-  probeIntervalSeconds: isNumber, autoAssignEnabled: isBoolean, autoBalanceEnabled: isBoolean, assignmentIntervalSeconds: isNumber, updatedAt: isString,
+  probeIntervalSeconds: isNumber, autoAssignEnabled: isBoolean, autoBalanceEnabled: isBoolean, assignmentIntervalSeconds: isNumber,
+  fallbacks: isRecordOf(egressFallbackConfigValidator), updatedAt: isString,
 });
 
 export function getSettings(): Promise<SettingsSnapshotDTO> {
