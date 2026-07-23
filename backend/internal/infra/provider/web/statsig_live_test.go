@@ -35,6 +35,9 @@ func TestLiveStatsigAcceptedByGrok(t *testing.T) {
 		baseURL = "https://grok.com"
 	}
 	cfg := Config{BaseURL: baseURL, StatsigMode: mode, QuotaTimeoutSeconds: 60, ChatTimeoutSeconds: 120}
+	if mode == statsigModeLocal {
+		cfg.StatsigMaterialURL = strings.TrimSpace(os.Getenv("GROK_LIVE_MATERIAL_URL"))
+	}
 	if mode == "signer" {
 		cfg.StatsigMode = "url"
 		cfg.StatsigSignerURL = strings.TrimSpace(os.Getenv("GROK_LIVE_SIGNER_URL"))
@@ -96,7 +99,7 @@ func TestLiveStatsigAcceptedByGrok(t *testing.T) {
 		t.Fatalf("%s Statsig chat response failed: %v", mode, err)
 	}
 	if response.StatusCode != http.StatusOK {
-		t.Fatalf("%s Statsig chat returned HTTP %d", mode, response.StatusCode)
+		t.Fatalf("%s Statsig chat returned HTTP %d: %s", mode, response.StatusCode, strings.TrimSpace(string(responseBody)))
 	}
 	var result struct {
 		Choices []struct {

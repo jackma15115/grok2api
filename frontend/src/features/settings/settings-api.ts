@@ -7,7 +7,7 @@ export type SettingsConfigDTO = {
   providerBuild: { baseURL: string; fallbackBaseURL: string; clientVersion: string; clientIdentifier: string; tokenAuth: string; tokenAuthConfigured: boolean; userAgent: string };
   providerWeb: {
     baseURL: string; quotaTimeout: string; chatTimeout: string; imageTimeout: string; videoTimeout: string;
-    statsigMode: "manual" | "local" | "url"; statsigManualValue?: string; statsigManualConfigured: boolean; statsigSignerURL: string;
+    statsigMode: "manual" | "local" | "url"; statsigManualValue?: string; statsigManualConfigured: boolean; statsigSignerURL: string; statsigMaterialURL: string;
     clearanceMode: "manual" | "flaresolverr"; flareSolverrURL: string; clearanceTimeout: string; clearanceRefresh: string;
     mediaConcurrency: number; allowNSFW: boolean;
     recoveryBackoffBase: string; recoveryBackoffMax: string;
@@ -59,7 +59,7 @@ const settingsConfigValidator = hasShape({
   providerWeb: hasShape({
     baseURL: isString, quotaTimeout: isString, chatTimeout: isString, imageTimeout: isString, videoTimeout: isString,
     statsigMode: isOneOf("manual", "local", "url"), statsigManualValue: isOptional(isString), statsigManualConfigured: isBoolean,
-    statsigSignerURL: isString, clearanceMode: isOneOf("manual", "flaresolverr"), flareSolverrURL: isString,
+    statsigSignerURL: isString, statsigMaterialURL: isString, clearanceMode: isOneOf("manual", "flaresolverr"), flareSolverrURL: isString,
     clearanceTimeout: isString, clearanceRefresh: isString, mediaConcurrency: isNumber, allowNSFW: isBoolean, recoveryBackoffBase: isString, recoveryBackoffMax: isString,
   }),
   providerConsole: hasShape({ baseURL: isString, chatTimeout: isString, toolCall: isBoolean, nativeTools: isBoolean }),

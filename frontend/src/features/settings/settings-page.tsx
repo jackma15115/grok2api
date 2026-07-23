@@ -131,6 +131,10 @@ export function SettingsPage() {
                 <SettingsField controlId="web-statsig-url" className="sm:col-span-2" label={t("settings.web.statsigSignerURL")} description={t("settings.web.statsigSignerURLHelp")} error={form.formState.errors.providerWeb?.statsigSignerURL?.message}>
                   <Input id="web-statsig-url" type="url" placeholder="http://grok-signer-go:8788/sign" {...form.register("providerWeb.statsigSignerURL")} />
                 </SettingsField>
+              ) : statsigMode === "local" ? (
+                <SettingsField controlId="web-statsig-material-url" className="sm:col-span-2" label={t("statsigMaterialURL")} description={t("statsigMaterialURLHelp")} error={form.formState.errors.providerWeb?.statsigMaterialURL?.message}>
+                  <Input id="web-statsig-material-url" type="url" placeholder="http://seed-hex-catch:8789/material" {...form.register("providerWeb.statsigMaterialURL")} />
+                </SettingsField>
               ) : null}
               <SettingsField controlId="web-quota-timeout" label={t("settings.web.quotaTimeout")} description={t("settings.web.quotaTimeoutHelp")} error={form.formState.errors.providerWeb?.quotaTimeout?.message}><Controller control={form.control} name="providerWeb.quotaTimeout" render={({ field }) => <DurationInput id="web-quota-timeout" value={field.value} onChange={field.onChange} />} /></SettingsField>
               <SettingsField controlId="web-chat-timeout" label={t("settings.web.chatTimeout")} description={t("settings.web.chatTimeoutHelp")} error={form.formState.errors.providerWeb?.chatTimeout?.message}><Controller control={form.control} name="providerWeb.chatTimeout" render={({ field }) => <DurationInput id="web-chat-timeout" value={field.value} onChange={field.onChange} />} /></SettingsField>

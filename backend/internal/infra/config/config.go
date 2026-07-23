@@ -143,6 +143,7 @@ type WebProviderConfig struct {
 	StatsigMode         string   `yaml:"-"`
 	StatsigManualValue  string   `yaml:"-"`
 	StatsigSignerURL    string   `yaml:"-"`
+	StatsigMaterialURL  string   `yaml:"-"`
 	ClearanceMode       string   `yaml:"-"`
 	FlareSolverrURL     string   `yaml:"-"`
 	ClearanceTimeout    Duration `yaml:"-"`
@@ -431,6 +432,11 @@ func (c Config) Validate() error {
 			return errors.New("provider.web 手动 x-statsig-id 格式无效")
 		}
 	case StatsigModeLocal:
+		if value := strings.TrimSpace(c.Provider.Web.StatsigMaterialURL); value != "" {
+			if err := signerurl.Validate(value); err != nil {
+				return fmt.Errorf("provider.web Statsig material URL 无效: %w", err)
+			}
+		}
 	case StatsigModeURL:
 		if err := signerurl.Validate(c.Provider.Web.StatsigSignerURL); err != nil {
 			return fmt.Errorf("provider.web Statsig 签名 URL 无效: %w", err)

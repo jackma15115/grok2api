@@ -90,6 +90,10 @@ jobs:
           browser_path=$(node -e "const { chromium } = require('playwright'); process.stdout.write(chromium.executablePath())")
           SIGNER_TEST_BROWSER="$browser_path" npm test
 
+      - name: Test seed-hex-catch
+        working-directory: seed-hex-catch
+        run: npm ci && npm test
+
   check_ghcr_image:
     name: Build ${{ matrix.image }} image (${{ matrix.arch }})
     if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.publish != true)
@@ -116,6 +120,18 @@ jobs:
             runner: ubuntu-24.04
             context: ./statsig-signer
             file: ./statsig-signer/Dockerfile
+          - image: seed-hex-catch
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+            context: ./seed-hex-catch
+            file: ./seed-hex-catch/Dockerfile
+          - image: seed-hex-catch
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            context: ./seed-hex-catch
+            file: ./seed-hex-catch/Dockerfile
           - image: statsig-signer
             arch: arm64
             platform: linux/arm64
@@ -181,6 +197,20 @@ jobs:
             runner: ubuntu-24.04-arm
             context: ./statsig-signer
             file: ./statsig-signer/Dockerfile
+          - image: seed-hex-catch
+            suffix: -seed-hex-catch
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+            context: ./seed-hex-catch
+            file: ./seed-hex-catch/Dockerfile
+          - image: seed-hex-catch
+            suffix: -seed-hex-catch
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            context: ./seed-hex-catch
+            file: ./seed-hex-catch/Dockerfile
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -244,6 +274,8 @@ jobs:
             suffix: ""
           - image: statsig-signer
             suffix: -statsig-signer
+          - image: seed-hex-catch
+            suffix: -seed-hex-catch
     permissions:
       contents: read
       packages: write

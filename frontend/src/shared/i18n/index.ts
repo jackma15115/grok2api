@@ -6,7 +6,9 @@ const resources = {
     translation: {
       appName: "Grok2API",
       statsigLocalMode: "本地生成",
-      statsigLocalModeHelp: "按请求在本机生成 x-statsig-id，无需外部签名服务；Grok 更新风控资产后可能需要升级。",
+      statsigLocalModeHelp: "按请求在本机生成 x-statsig-id；可选用 Material 服务自动更新 seed/hex，服务不可用时回退纯本地逻辑。",
+      statsigMaterialURL: "Material 服务 URL",
+      statsigMaterialURLHelp: "可选的 seed/hex 获取地址；留空使用内置材料，远端失败时自动回退。",
       webAccountSettings: {
         menu: "账号设置",
         acceptTerms: "接受服务协议",
@@ -995,7 +997,9 @@ const resources = {
     translation: {
       appName: "Grok2API",
       statsigLocalMode: "Local",
-      statsigLocalModeHelp: "Generate x-statsig-id locally without an external signer; Grok anti-bot asset changes may require an upgrade.",
+      statsigLocalModeHelp: "Generate x-statsig-id locally; an optional material service can refresh seed/hex, with automatic fallback to embedded material.",
+      statsigMaterialURL: "Material service URL",
+      statsigMaterialURLHelp: "Optional seed/hex endpoint; leave empty to use embedded material, with automatic fallback on remote failure.",
       webAccountSettings: {
         menu: "Account settings",
         acceptTerms: "Accept terms",

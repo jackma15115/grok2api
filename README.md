@@ -172,7 +172,7 @@ docker compose up -d
 docker compose logs -f grok2api
 ```
 
-Five Compose variants are provided:
+Six Compose variants are provided:
 
 | File | Services | Start command |
 | :-- | :-- | :-- |
@@ -181,6 +181,7 @@ Five Compose variants are provided:
 | `docker-compose.warp-flaresolverr.yml` | Grok2API + WARP + FlareSolverr | `docker compose -f docker-compose.warp-flaresolverr.yml up -d` |
 | `docker-compose.all.yml` | Grok2API + WARP + FlareSolverr + Statsig signer | `docker compose -f docker-compose.all.yml up -d` |
 | `docker-compose.statsig-signer.yml` | Public Statsig signer + FlareSolverr, without Grok2API | `docker compose -f docker-compose.statsig-signer.yml up -d` |
+| `docker-compose.seed-hex-catch.yml` | SVG seed/HEX collector with embedded FlareSolverr | `docker compose -f docker-compose.seed-hex-catch.yml up -d` |
 
 The WARP variants expose SOCKS5 at `socks5://warp:1080` inside the Compose network. Configure that address in Runtime Settings for Grok2API egress. The standalone signer publishes port `8787`; put access control and rate limiting in front of it when exposed publicly.
 
@@ -358,7 +359,15 @@ Then open **Runtime Settings → Media & Network → Clearance**, select `FlareS
 
 The repository includes a Playwright-backed experimental Statsig signer. It calibrates against a real Grok page, verifies a browser-generated sample, and then exposes a compatible `/sign` endpoint:
 
-The built-in `Local` mode uses a captured material snapshot and can stop working when Grok rotates that material. For long-running deployments, use the `URL` signer mode so Playwright can recalibrate automatically.
+The built-in `Local` mode uses an embedded material snapshot. It can optionally pull fresh seed/HEX from `seed-hex-catch`; if that service is unavailable or returns invalid material, Local automatically falls back to the embedded snapshot.
+
+To run the standalone SVG collector, including FlareSolverr in the same image:
+
+```bash
+docker compose -f docker-compose.seed-hex-catch.yml up -d
+```
+
+Select `Local` mode and set the Material service URL to `http://seed-hex-catch:8789/material` when both containers share a network. See [seed-hex-catch/README.md](seed-hex-catch/README.md) for configuration details.
 
 ```bash
 docker compose -f docker-compose.all.yml up -d
