@@ -27,6 +27,7 @@ const (
 	statsigCacheMaxEntries  = 4096
 	statsigMetaBodyLimit    = 4 << 20
 	statsigResponseLimit    = 4 << 10
+	statsigMaterialLimit    = 4 << 10
 )
 
 type statsigCacheEntry struct {
@@ -47,15 +48,17 @@ type statsigWarmTarget struct {
 type statsigSigner struct {
 	client           *http.Client
 	fetchMeta        func(context.Context, string, string, *infraegress.Lease) (string, error)
+	fetchMaterial    func(context.Context, string) (localStatsigMaterial, time.Time, error)
 	validateEndpoint func(context.Context, string) error
 	now              func() time.Time
 	mu               sync.Mutex
 	entries          map[string]statsigCacheEntry
+	localMaterials   map[string]localStatsigMaterialEntry
 	refreshes        singleflight.Group
 }
 
 func newStatsigSigner() *statsigSigner {
-	return &statsigSigner{
+	signer := &statsigSigner{
 		client: &http.Client{
 			Timeout:       12 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
@@ -64,7 +67,10 @@ func newStatsigSigner() *statsigSigner {
 		validateEndpoint: validateStatsigSignerEndpoint,
 		now:              time.Now,
 		entries:          make(map[string]statsigCacheEntry),
+		localMaterials:   make(map[string]localStatsigMaterialEntry),
 	}
+	signer.fetchMaterial = signer.requestLocalMaterial
+	return signer
 }
 
 func (s *statsigSigner) Sign(ctx context.Context, baseURL, signerURL, token string, lease *infraegress.Lease, method, target string) (string, string, error) {
@@ -169,6 +175,7 @@ func (s *statsigSigner) Invalidate(baseURL, signerURL, method, target string) {
 func (s *statsigSigner) Clear() {
 	s.mu.Lock()
 	clear(s.entries)
+	clear(s.localMaterials)
 	s.mu.Unlock()
 }
 
@@ -376,12 +383,20 @@ func (a *Adapter) applySignedStatsig(ctx context.Context, request *http.Request,
 		return
 	}
 	if cfg.StatsigMode == statsigModeLocal {
-		value, err := generateLocalStatsig(request.URL.EscapedPath(), request.Method, time.Now())
+		if a.statsig == nil {
+			return
+		}
+		value, source, err := a.statsig.SignLocal(ctx, cfg.StatsigMaterialURL, request.Method, request.URL.EscapedPath())
 		if err != nil {
 			a.log().Warn("web_statsig_local_generation_failed", "method", request.Method, "path", request.URL.EscapedPath(), "error", err)
 			return
 		}
 		request.Header.Set("x-statsig-id", value)
+		if source == "remote" {
+			a.log().Info("web_statsig_local_material_refreshed", "path", request.URL.EscapedPath())
+		} else if source == "fallback" {
+			a.log().Warn("web_statsig_local_material_fallback", "path", request.URL.EscapedPath())
+		}
 		return
 	}
 	if a.statsig == nil {
@@ -437,6 +452,13 @@ func (a *Adapter) WarmStatsig(ctx context.Context, credential account.Credential
 
 func (a *Adapter) invalidateSignedStatsig(method, target string) bool {
 	cfg := a.config()
+	if cfg.StatsigMode == statsigModeLocal && a.statsig != nil && strings.TrimSpace(cfg.StatsigMaterialURL) != "" {
+		a.statsig.InvalidateLocal(cfg.StatsigMaterialURL)
+		if parsed, err := url.Parse(target); err == nil {
+			a.log().Info("web_statsig_local_material_invalidated", "method", method, "path", parsed.EscapedPath())
+		}
+		return true
+	}
 	if cfg.StatsigMode == "url" && a.statsig != nil {
 		a.statsig.Invalidate(cfg.BaseURL, cfg.StatsigSignerURL, method, target)
 		if parsed, err := url.Parse(target); err == nil {

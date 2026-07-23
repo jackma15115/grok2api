@@ -58,6 +58,7 @@ export const settingsSchema = z.object({
     statsigManualValue: z.string().trim().max(4096),
     statsigManualConfigured: z.boolean(),
     statsigSignerURL: z.string().trim().max(2048),
+    statsigMaterialURL: z.string().trim().max(2048),
     clearanceMode: z.enum(["manual", "flaresolverr"]),
     flareSolverrURL: z.string().trim().max(2048),
     clearanceTimeout: durationSchema.refine((value) => durationSeconds(value) >= 10 && durationSeconds(value) <= 300),
@@ -79,6 +80,9 @@ export const settingsSchema = z.object({
       if (!validStatsigSignerURL(value.statsigSignerURL)) {
         context.addIssue({ code: "custom", path: ["statsigSignerURL"], message: "invalid" });
       }
+    }
+    if (value.statsigMode === "local" && value.statsigMaterialURL.length > 0 && !validStatsigSignerURL(value.statsigMaterialURL)) {
+      context.addIssue({ code: "custom", path: ["statsigMaterialURL"], message: "invalid" });
     }
     if (value.clearanceMode === "flaresolverr" && !validHTTPURL(value.flareSolverrURL)) {
       context.addIssue({ code: "custom", path: ["flareSolverrURL"], message: "invalid" });

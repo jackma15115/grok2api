@@ -287,6 +287,26 @@ func TestStatsigManualValueIsWriteOnlyAndClearedByURLMode(t *testing.T) {
 	}
 }
 
+func TestStatsigMaterialURLIsPersistedForLocalMode(t *testing.T) {
+	cfg := testConfig(t)
+	repository := &runtimeSettingsRepositoryStub{}
+	service := NewService(cfg, time.Time{}, 0, repository, nil, nil)
+	input := service.Get().Config
+	input.ProviderWeb.StatsigMode = config.StatsigModeLocal
+	input.ProviderWeb.StatsigMaterialURL = "http://seed-hex-catch:8789/material"
+
+	snapshot, err := service.Update(context.Background(), service.Get().Revision, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Config.ProviderWeb.StatsigMaterialURL != input.ProviderWeb.StatsigMaterialURL {
+		t.Fatalf("snapshot material URL = %q", snapshot.Config.ProviderWeb.StatsigMaterialURL)
+	}
+	if repository.value.ProviderWeb.StatsigMaterialURL != input.ProviderWeb.StatsigMaterialURL {
+		t.Fatalf("persisted material URL = %q", repository.value.ProviderWeb.StatsigMaterialURL)
+	}
+}
+
 func TestLoadPersistedRejectsIncompleteStatsigPayload(t *testing.T) {
 	cfg := testConfig(t)
 	value := toDomainConfig(cfg)

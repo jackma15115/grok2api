@@ -18,6 +18,7 @@ type Config struct {
 	StatsigMode         string
 	StatsigManualValue  string
 	StatsigSignerURL    string
+	StatsigMaterialURL  string
 	QuotaTimeoutSeconds int
 	ChatTimeoutSeconds  int
 	ImageTimeoutSeconds int
@@ -87,7 +88,7 @@ func normalizedConfig(cfg Config) Config {
 func (a *Adapter) UpdateConfig(cfg Config) {
 	cfg = normalizedConfig(cfg)
 	a.mu.Lock()
-	changed := a.cfg.StatsigMode != cfg.StatsigMode || a.cfg.StatsigManualValue != cfg.StatsigManualValue || a.cfg.StatsigSignerURL != cfg.StatsigSignerURL || a.cfg.BaseURL != cfg.BaseURL
+	changed := a.cfg.StatsigMode != cfg.StatsigMode || a.cfg.StatsigManualValue != cfg.StatsigManualValue || a.cfg.StatsigSignerURL != cfg.StatsigSignerURL || a.cfg.StatsigMaterialURL != cfg.StatsigMaterialURL || a.cfg.BaseURL != cfg.BaseURL
 	a.cfg = cfg
 	a.mu.Unlock()
 	if changed && a.statsig != nil {

@@ -1,28 +1,79 @@
 package web
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"testing"
 	"time"
 )
 
 func TestBuildLocalStatsigMatchesBrowserCapture(t *testing.T) {
-	const seedBase64 = "1zyptn4udMOQU5tdgJBcp9Zu71BLajtU53nI+Mi+4VPN+d9BXkYvGxeEnBRa3ow0"
-	seed, err := base64.RawStdEncoding.DecodeString(seedBase64)
+	const capturedID = "tQVp8pVbzXw8elYLQdJlTXuXWTrs0WOW7B7OkkngVLIoVQIP6RuOYPggmRzZEAZWOB6EpLMJZcIKFl5R7WvSNFypdNq/tg"
+	captured, err := base64.RawStdEncoding.DecodeString(capturedID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := buildLocalStatsig(seed, "ad36d100100", "/rest/app-chat/conversations/new", "POST", statsigEpoch+99789180, 143)
+	value, err := buildLocalStatsig(localStatsigSeed, localStatsigHEX, "/rest/modes", "POST", statsigEpoch+101790123, captured[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []byte{143, 88, 179, 38, 57, 241, 161, 251, 76, 31, 220, 20, 210, 15, 31, 211, 40, 89, 225, 96, 223, 196, 229, 180, 219, 104, 246, 71, 119, 71, 49, 110, 220, 66, 118, 80, 206, 209, 201, 160, 148, 152, 11, 19, 155, 213, 81, 3, 187, 243, 38, 125, 138, 27, 62, 96, 63, 212, 65, 52, 228, 53, 177, 114, 125, 99, 165, 182, 110, 140}
-	decoded, err := base64.RawStdEncoding.DecodeString(value)
+	if value != capturedID {
+		t.Fatal("local Statsig does not match browser capture")
+	}
+}
+
+func TestLocalStatsigUsesBuiltInMaterialWithoutRemoteURL(t *testing.T) {
+	signer := newStatsigSigner()
+	signer.fetchMaterial = func(context.Context, string) (localStatsigMaterial, time.Time, error) {
+		t.Fatal("material service should not be called when URL is empty")
+		return localStatsigMaterial{}, time.Time{}, nil
+	}
+	value, source, err := signer.SignLocal(context.Background(), "", "POST", "/rest/modes")
+	if err != nil || source != "built-in" || !validStatsigID(value) {
+		t.Fatalf("source=%q valid=%v err=%v", source, validStatsigID(value), err)
+	}
+}
+
+func TestLocalStatsigUsesRemoteMaterial(t *testing.T) {
+	now := time.Date(2026, 7, 23, 2, 0, 0, 0, time.UTC)
+	signer := newStatsigSigner()
+	signer.now = func() time.Time { return now }
+	material, err := newLocalStatsigMaterialPair(
+		"exHFyDNMkNhYgrQns67Q4eZZlzsta4qBAp8iQcn/a2mmXOBZ1m/BxScUEaJmhu8t",
+		"25b52710051eb851eb851ec0051eb851eb851ec100",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(decoded) != string(want) {
-		t.Fatalf("local Statsig does not match browser capture: %v", decoded)
+	signer.fetchMaterial = func(context.Context, string) (localStatsigMaterial, time.Time, error) {
+		return material, now.Add(20 * time.Minute), nil
+	}
+	value, source, err := signer.SignLocal(context.Background(), "http://seed-hex-catch:8789/material", "POST", "/rest/modes")
+	if err != nil || source != "remote" || !validStatsigID(value) {
+		t.Fatalf("source=%q valid=%v err=%v", source, validStatsigID(value), err)
+	}
+	entry := signer.localMaterials["http://seed-hex-catch:8789/material"]
+	if !entry.expiresAt.Equal(now.Add(remoteStatsigMaterialTTL)) {
+		t.Fatalf("remote cache expiry = %v", entry.expiresAt)
+	}
+}
+
+func TestLocalStatsigFallsBackWhenRemoteMaterialFails(t *testing.T) {
+	signer := newStatsigSigner()
+	fetches := 0
+	signer.fetchMaterial = func(context.Context, string) (localStatsigMaterial, time.Time, error) {
+		fetches++
+		return localStatsigMaterial{}, time.Time{}, errors.New("collector unavailable")
+	}
+
+	value, source, err := signer.SignLocal(context.Background(), "http://seed-hex-catch:8789/material", "POST", "/rest/modes")
+	if err != nil || source != "fallback" || !validStatsigID(value) {
+		t.Fatalf("source=%q valid=%v err=%v", source, validStatsigID(value), err)
+	}
+	_, source, err = signer.SignLocal(context.Background(), "http://seed-hex-catch:8789/material", "POST", "/rest/modes")
+	if err != nil || source != "cache" || fetches != 1 {
+		t.Fatalf("cached fallback source=%q fetches=%d err=%v", source, fetches, err)
 	}
 }
 

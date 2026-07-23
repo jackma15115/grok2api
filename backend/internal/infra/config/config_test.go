@@ -286,6 +286,14 @@ func TestValidateStatsigModes(t *testing.T) {
 	if err := local.Validate(); err != nil {
 		t.Fatalf("local Statsig mode rejected: %v", err)
 	}
+	local.Provider.Web.StatsigMaterialURL = "http://seed-hex-catch:8789/material"
+	if err := local.Validate(); err != nil {
+		t.Fatalf("Docker internal Statsig material URL rejected: %v", err)
+	}
+	local.Provider.Web.StatsigMaterialURL = "http://material.example.com:8789/material"
+	if err := local.Validate(); err == nil {
+		t.Fatal("public plaintext Statsig material URL was accepted")
+	}
 
 	remote := base
 	remote.Provider.Web.StatsigMode = StatsigModeURL

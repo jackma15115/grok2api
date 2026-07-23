@@ -75,20 +75,69 @@ jobs:
         working-directory: frontend
         run: pnpm build
 
+      - name: Install Statsig signer dependencies
+        working-directory: statsig-signer
+        run: npm ci
+
+      - name: Install Statsig signer Chromium
+        working-directory: statsig-signer
+        run: npx playwright install --with-deps chromium
+
+      - name: Test Statsig signer
+        working-directory: statsig-signer
+        shell: bash
+        run: |
+          browser_path=$(node -e "const { chromium } = require('playwright'); process.stdout.write(chromium.executablePath())")
+          SIGNER_TEST_BROWSER="$browser_path" npm test
+
+      - name: Test seed-hex-catch
+        working-directory: seed-hex-catch
+        run: npm ci && npm test
+
   check_ghcr_image:
-    name: Build image (${{ matrix.arch }})
+    name: Build ${{ matrix.image }} image (${{ matrix.arch }})
     if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.publish != true)
     needs: verify
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
+          - image: grok2api
+            arch: amd64
             platform: linux/amd64
             runner: ubuntu-24.04
-          - arch: arm64
+            context: .
+            file: ./Dockerfile
+          - image: grok2api
+            arch: arm64
             platform: linux/arm64
             runner: ubuntu-24.04-arm
+            context: .
+            file: ./Dockerfile
+          - image: statsig-signer
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+            context: ./statsig-signer
+            file: ./statsig-signer/Dockerfile
+          - image: seed-hex-catch
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+            context: ./seed-hex-catch
+            file: ./seed-hex-catch/Dockerfile
+          - image: seed-hex-catch
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            context: ./seed-hex-catch
+            file: ./seed-hex-catch/Dockerfile
+          - image: statsig-signer
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            context: ./statsig-signer
+            file: ./statsig-signer/Dockerfile
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -101,16 +150,16 @@ jobs:
       - name: Build
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: ./Dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           platforms: ${{ matrix.platform }}
           push: false
-          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
           provenance: false
           sbom: false
 
   build_ghcr_image:
-    name: Publish image (${{ matrix.arch }})
+    name: Publish ${{ matrix.image }} image (${{ matrix.arch }})
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     needs: verify
     permissions:
@@ -120,12 +169,48 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
+          - image: grok2api
+            suffix: ""
+            arch: amd64
             platform: linux/amd64
             runner: ubuntu-24.04
-          - arch: arm64
+            context: .
+            file: ./Dockerfile
+          - image: grok2api
+            suffix: ""
+            arch: arm64
             platform: linux/arm64
             runner: ubuntu-24.04-arm
+            context: .
+            file: ./Dockerfile
+          - image: statsig-signer
+            suffix: -statsig-signer
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+            context: ./statsig-signer
+            file: ./statsig-signer/Dockerfile
+          - image: statsig-signer
+            suffix: -statsig-signer
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            context: ./statsig-signer
+            file: ./statsig-signer/Dockerfile
+          - image: seed-hex-catch
+            suffix: -seed-hex-catch
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+            context: ./seed-hex-catch
+            file: ./seed-hex-catch/Dockerfile
+          - image: seed-hex-catch
+            suffix: -seed-hex-catch
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            context: ./seed-hex-catch
+            file: ./seed-hex-catch/Dockerfile
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -140,7 +225,7 @@ jobs:
         shell: bash
         run: |
           image_name=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
-          echo "name=ghcr.io/$image_name" >> "$GITHUB_OUTPUT"
+          echo "name=ghcr.io/$image_name${{ matrix.suffix }}" >> "$GITHUB_OUTPUT"
 
       - name: Docker metadata
         id: meta
@@ -164,23 +249,33 @@ jobs:
       - name: Build and publish
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: ./Dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           platforms: ${{ matrix.platform }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.arch }}
-          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }},mode=max
           provenance: mode=max
           sbom: true
 
   merge:
-    name: Merge image
+    name: Merge ${{ matrix.image }} image
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     needs:
       - build_ghcr_image
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: grok2api
+            suffix: ""
+          - image: statsig-signer
+            suffix: -statsig-signer
+          - image: seed-hex-catch
+            suffix: -seed-hex-catch
     permissions:
       contents: read
       packages: write
@@ -194,7 +289,7 @@ jobs:
         shell: bash
         run: |
           image_name=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
-          echo "name=ghcr.io/$image_name" >> "$GITHUB_OUTPUT"
+          echo "name=ghcr.io/$image_name${{ matrix.suffix }}" >> "$GITHUB_OUTPUT"
 
       - name: Docker metadata
         id: meta

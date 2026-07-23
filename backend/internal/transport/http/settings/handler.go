@@ -73,6 +73,7 @@ type providerWebConfigDTO struct {
 	StatsigManualValue      string  `json:"statsigManualValue,omitempty"`
 	StatsigManualConfigured bool    `json:"statsigManualConfigured"`
 	StatsigSignerURL        string  `json:"statsigSignerURL"`
+	StatsigMaterialURL      string  `json:"statsigMaterialURL"`
 	ClearanceMode           *string `json:"clearanceMode,omitempty"`
 	FlareSolverrURL         *string `json:"flareSolverrURL,omitempty"`
 	ClearanceTimeout        *string `json:"clearanceTimeout,omitempty"`
@@ -188,7 +189,7 @@ func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
 		ProviderWeb: settingsapp.ProviderWebConfig{
 			BaseURL: value.ProviderWeb.BaseURL, QuotaTimeout: value.ProviderWeb.QuotaTimeout,
 			StatsigMode: value.ProviderWeb.StatsigMode, StatsigManualValue: value.ProviderWeb.StatsigManualValue,
-			StatsigManualConfigured: value.ProviderWeb.StatsigManualConfigured, StatsigSignerURL: value.ProviderWeb.StatsigSignerURL,
+			StatsigManualConfigured: value.ProviderWeb.StatsigManualConfigured, StatsigSignerURL: value.ProviderWeb.StatsigSignerURL, StatsigMaterialURL: value.ProviderWeb.StatsigMaterialURL,
 			ClearanceMode: optionalString(value.ProviderWeb.ClearanceMode), FlareSolverrURL: optionalString(value.ProviderWeb.FlareSolverrURL),
 			ClearanceTimeout: optionalString(value.ProviderWeb.ClearanceTimeout), ClearanceRefresh: optionalString(value.ProviderWeb.ClearanceRefresh),
 			ClearanceProvided: clearanceProvided,
@@ -259,8 +260,9 @@ func newSettingsResponse(value settingsapp.Snapshot) settingsResponse {
 			ProviderWeb: providerWebConfigDTO{
 				BaseURL: config.ProviderWeb.BaseURL, QuotaTimeout: config.ProviderWeb.QuotaTimeout,
 				StatsigMode: config.ProviderWeb.StatsigMode, StatsigManualConfigured: config.ProviderWeb.StatsigManualConfigured,
-				StatsigSignerURL: config.ProviderWeb.StatsigSignerURL,
-				ClearanceMode:    stringPointer(config.ProviderWeb.ClearanceMode), FlareSolverrURL: stringPointer(config.ProviderWeb.FlareSolverrURL),
+				StatsigSignerURL:   config.ProviderWeb.StatsigSignerURL,
+				StatsigMaterialURL: config.ProviderWeb.StatsigMaterialURL,
+				ClearanceMode:      stringPointer(config.ProviderWeb.ClearanceMode), FlareSolverrURL: stringPointer(config.ProviderWeb.FlareSolverrURL),
 				ClearanceTimeout: stringPointer(config.ProviderWeb.ClearanceTimeout), ClearanceRefresh: stringPointer(config.ProviderWeb.ClearanceRefresh),
 				ChatTimeout: config.ProviderWeb.ChatTimeout, ImageTimeout: config.ProviderWeb.ImageTimeout,
 				VideoTimeout:     config.ProviderWeb.VideoTimeout,

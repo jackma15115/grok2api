@@ -4,6 +4,9 @@ services:
   grok2api:
     container_name: grok2api
     image: "${GROK2API_IMAGE:-ghcr.io/jackma15115/grok2api:latest}"
+    depends_on:
+      warp:
+        condition: service_started
     ports:
       - "${GROK2API_PORT:-8000}:8000"
     environment:
@@ -16,6 +19,17 @@ services:
     stop_grace_period: 30s
     security_opt:
       - no-new-privileges:true
+
+  warp:
+    container_name: warp
+    image: caomingjun/warp:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:1080:1080"
+    environment:
+      WARP_SLEEP: 2
+    cap_add:
+      - NET_ADMIN
 
 volumes:
   grok2api-data:

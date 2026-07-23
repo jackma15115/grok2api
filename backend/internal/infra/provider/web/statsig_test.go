@@ -228,7 +228,8 @@ func TestApplySignedStatsigUsesManualValue(t *testing.T) {
 }
 
 func TestApplySignedStatsigUsesLocalGenerator(t *testing.T) {
-	adapter := &Adapter{cfg: Config{BaseURL: "https://grok.com", StatsigMode: statsigModeLocal}}
+	signer := newStatsigSigner()
+	adapter := &Adapter{cfg: Config{BaseURL: "https://grok.com", StatsigMode: statsigModeLocal}, statsig: signer}
 	request, err := http.NewRequest(http.MethodPost, "https://grok.com/rest/app-chat/conversations/new", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -282,14 +283,14 @@ func TestApplySignedStatsigNeverLeavesRandomFallback(t *testing.T) {
 	}
 }
 
-func TestStatsigInvalidationOnlyAppliesToURLMode(t *testing.T) {
+func TestStatsigInvalidationAppliesToGeneratedModes(t *testing.T) {
 	manual := &Adapter{cfg: Config{StatsigMode: "manual"}, statsig: newStatsigSigner()}
 	if manual.invalidateSignedStatsig(http.MethodPost, "https://grok.com/rest/test") {
 		t.Fatal("manual Statsig must not be invalidated automatically")
 	}
-	local := &Adapter{cfg: Config{StatsigMode: statsigModeLocal}, statsig: newStatsigSigner()}
-	if local.invalidateSignedStatsig(http.MethodPost, "https://grok.com/rest/test") {
-		t.Fatal("local Statsig must not mutate the URL signer cache")
+	local := &Adapter{cfg: Config{StatsigMode: statsigModeLocal, StatsigMaterialURL: "http://seed-hex-catch:8789/material"}, statsig: newStatsigSigner()}
+	if !local.invalidateSignedStatsig(http.MethodPost, "https://grok.com/rest/test") {
+		t.Fatal("local Statsig material must be invalidated after anti-bot rejection")
 	}
 	urlMode := &Adapter{cfg: Config{BaseURL: "https://grok.com", StatsigMode: "url", StatsigSignerURL: "https://signer.example/sign"}, statsig: newStatsigSigner()}
 	if !urlMode.invalidateSignedStatsig(http.MethodPost, "https://grok.com/rest/test") {

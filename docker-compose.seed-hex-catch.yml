@@ -1,0 +1,27 @@
+name: grok2api-seed-hex-catch
+
+services:
+  seed-hex-catch:
+    container_name: seed-hex-catch
+    image: "${SEED_HEX_CATCH_IMAGE:-ghcr.io/jackma15115/grok2api-seed-hex-catch:latest}"
+    ports:
+      - "${SEED_HEX_CATCH_PORT:-8789}:8789"
+    environment:
+      TZ: "${TZ:-Asia/Shanghai}"
+      LOG_LEVEL: "${FLARESOLVERR_LOG_LEVEL:-info}"
+      CATCH_TARGET_URL: "${CATCH_TARGET_URL:-https://grok.com/}"
+      CATCH_FLARESOLVERR_URL: "http://127.0.0.1:8191"
+      CATCH_FLARESOLVERR_TIMEOUT_MS: "${CATCH_FLARESOLVERR_TIMEOUT_MS:-90000}"
+      CATCH_BROWSER_EXECUTABLE_PATH: "/usr/bin/chromium"
+      CATCH_BROWSER_TIMEOUT_MS: "${CATCH_BROWSER_TIMEOUT_MS:-60000}"
+      CATCH_PAGE_SETTLE_MS: "${CATCH_PAGE_SETTLE_MS:-5000}"
+      CATCH_PROXY_URL: "${CATCH_PROXY_URL:-}"
+      CATCH_REFRESH_INTERVAL_MS: "${CATCH_REFRESH_INTERVAL_MS:-600000}"
+      CATCH_RETRY_INTERVAL_MS: "${CATCH_RETRY_INTERVAL_MS:-15000}"
+      CATCH_API_TOKEN: "${CATCH_API_TOKEN:-}"
+    restart: unless-stopped
+    init: true
+    shm_size: "${SEED_HEX_CATCH_SHM_SIZE:-128m}"
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true

@@ -176,6 +176,21 @@ docker compose up -d
 docker compose logs -f grok2api
 ```
 
+Six Compose variants are provided:
+
+| File | Services | Start command |
+| :-- | :-- | :-- |
+| `docker-compose.yml` | Grok2API only | `docker compose up -d` |
+| `docker-compose.warp.yml` | Grok2API + WARP | `docker compose -f docker-compose.warp.yml up -d` |
+| `docker-compose.warp-flaresolverr.yml` | Grok2API + WARP + FlareSolverr | `docker compose -f docker-compose.warp-flaresolverr.yml up -d` |
+| `docker-compose.all.yml` | Grok2API + WARP + FlareSolverr + Statsig signer | `docker compose -f docker-compose.all.yml up -d` |
+| `docker-compose.statsig-signer.yml` | Public Statsig signer + FlareSolverr, without Grok2API | `docker compose -f docker-compose.statsig-signer.yml up -d` |
+| `docker-compose.seed-hex-catch.yml` | SVG seed/HEX collector with embedded FlareSolverr | `docker compose -f docker-compose.seed-hex-catch.yml up -d` |
+
+The WARP variants expose SOCKS5 at `socks5://warp:1080` inside the Compose network. Configure that address in Runtime Settings for Grok2API egress. The standalone signer publishes port `8787`; put access control and rate limiting in front of it when exposed publicly.
+
+All variants containing Grok2API share the same Compose project and `grok2api-data` volume. When switching variants, append `--remove-orphans` to the new `up -d` command so services omitted by the new variant are stopped without deleting application data.
+
 The admin console is available at `http://127.0.0.1:8000` by default.
 
 Compose mounts `config.yaml` read-only and stores the SQLite database and local media in the `grok2api-data` volume. The image already contains the frontend; no separate web deployment is required.
@@ -348,12 +363,40 @@ The relational database stores accounts, credentials, models, quotas, client key
 To automatically maintain Grok Web Cloudflare Clearance, start the optional FlareSolverr Compose service:
 
 ```bash
-docker compose --profile flaresolverr up -d
+docker compose -f docker-compose.warp-flaresolverr.yml up -d
 # or
-podman compose --profile flaresolverr up -d
+podman compose -f docker-compose.warp-flaresolverr.yml up -d
 ```
 
 Then open **Runtime Settings → Media & Network → Clearance**, select `FlareSolverr`, and use `http://flaresolverr:8191` as the solver URL. FlareSolverr is not published on the host; each Web or Console egress node uses its own proxy to obtain cookies and User-Agent.
+
+### Experimental self-hosted Statsig signer
+
+The repository includes a Playwright-backed experimental Statsig signer. It calibrates against a real Grok page, verifies a browser-generated sample, and then exposes a compatible `/sign` endpoint:
+
+The built-in `Local` mode uses an embedded material snapshot. It can optionally pull fresh seed/HEX from `seed-hex-catch`; if that service is unavailable or returns invalid material, Local automatically falls back to the embedded snapshot.
+
+To run the standalone SVG collector, including FlareSolverr in the same image:
+
+```bash
+docker compose -f docker-compose.seed-hex-catch.yml up -d
+```
+
+Select `Local` mode and set the Material service URL to `http://seed-hex-catch:8789/material` when both containers share a network. See [seed-hex-catch/README.md](seed-hex-catch/README.md) for configuration details.
+
+```bash
+docker compose -f docker-compose.all.yml up -d
+```
+
+This variant starts Grok2API, WARP, FlareSolverr, and the published signer image. The signer obtains matching cookies and User-Agent from FlareSolverr before Playwright performs the Statsig capture. Set the Statsig mode to `URL` and use `http://statsig-signer:8787/sign`.
+
+To run only the signer as a public service:
+
+```bash
+docker compose -f docker-compose.statsig-signer.yml up -d
+```
+
+See [statsig-signer/README.md](statsig-signer/README.md) for the full configuration.
 
 ### Resin sticky proxies
 

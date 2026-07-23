@@ -177,6 +177,21 @@ docker compose up -d
 docker compose logs -f grok2api
 ```
 
+仓库提供六种 Compose 部署文件：
+
+| 文件 | 服务 | 启动命令 |
+| :-- | :-- | :-- |
+| `docker-compose.yml` | 仅 Grok2API 主程序 | `docker compose up -d` |
+| `docker-compose.warp.yml` | Grok2API + WARP | `docker compose -f docker-compose.warp.yml up -d` |
+| `docker-compose.warp-flaresolverr.yml` | Grok2API + WARP + FlareSolverr | `docker compose -f docker-compose.warp-flaresolverr.yml up -d` |
+| `docker-compose.all.yml` | Grok2API + WARP + FlareSolverr + Statsig signer | `docker compose -f docker-compose.all.yml up -d` |
+| `docker-compose.statsig-signer.yml` | 公共 Statsig signer + FlareSolverr，不启动 Grok2API | `docker compose -f docker-compose.statsig-signer.yml up -d` |
+| `docker-compose.seed-hex-catch.yml` | 内置 FlareSolverr 的 SVG seed/HEX 采集服务 | `docker compose -f docker-compose.seed-hex-catch.yml up -d` |
+
+带 WARP 的版本可在 Compose 网络内使用 `socks5://warp:1080`，需要在 Grok2API 运行设置中将它配置为出口代理。独立 signer 会发布 `8787` 端口，公网部署时应增加访问控制和限流。
+
+所有包含 Grok2API 的版本共用同一个 Compose project 和 `grok2api-data` 数据卷。切换版本时，在新的 `up -d` 命令后追加 `--remove-orphans`，即可停止新版本不再包含的服务，同时保留主程序数据。
+
 管理端默认地址：`http://127.0.0.1:8000`。
 
 Compose 会将 `config.yaml` 只读挂载到容器，并使用 `grok2api-data` 保存 SQLite 数据库和本地媒体。镜像已经包含前端，无需单独部署 Web 服务。
@@ -349,12 +364,40 @@ Provider、服务容量、批量任务并发、模型路由、媒体、审计和
 如需自动维护 Grok Web / Console 的 Cloudflare Clearance，可启动可选的 FlareSolverr Compose 服务：
 
 ```bash
-docker compose --profile flaresolverr up -d
+docker compose -f docker-compose.warp-flaresolverr.yml up -d
 # 或
-podman compose --profile flaresolverr up -d
+podman compose -f docker-compose.warp-flaresolverr.yml up -d
 ```
 
 随后在管理端打开 **运行设置 → 媒体与网络 → Clearance**，选择 `FlareSolverr`，并将服务地址设为 `http://flaresolverr:8191`。FlareSolverr 不会暴露到宿主机；每个 Web 或 Console 出口节点均使用自身代理获取匹配的 Cookie 与 User-Agent。
+
+### 实验性自托管 Statsig 签名器
+
+仓库包含一个 Playwright 驱动的实验性 Statsig 签名服务。它使用真实 Grok 页面校准 `seed/HEX`，通过浏览器样本校验后再提供兼容的 `/sign` 接口：
+
+内置 `Local` 模式使用随程序提供的材料快照。它可以选择从 `seed-hex-catch` 拉取最新 seed/HEX；服务不可用或材料无效时，Local 会自动回退内置快照。
+
+如需运行独立 SVG 采集服务，并将 FlareSolverr 打包在同一镜像内：
+
+```bash
+docker compose -f docker-compose.seed-hex-catch.yml up -d
+```
+
+两个容器共享网络时，在管理端选择 `Local` 模式并将 Material 服务 URL 填写为 `http://seed-hex-catch:8789/material`。完整配置见 [seed-hex-catch/README.zh-CN.md](seed-hex-catch/README.zh-CN.md)。
+
+```bash
+docker compose -f docker-compose.all.yml up -d
+```
+
+该版本会同时启动 Grok2API、WARP、FlareSolverr 和已发布的 signer 镜像。signer 先从 FlareSolverr 获取匹配的 Cookie 和 User-Agent，再由 Playwright 完成 Statsig 捕获。随后在管理端将 Statsig 模式设为 `URL`，地址填写 `http://statsig-signer:8787/sign`。
+
+只运行 signer 并作为公共服务提供：
+
+```bash
+docker compose -f docker-compose.statsig-signer.yml up -d
+```
+
+完整说明见 [statsig-signer/README.zh-CN.md](statsig-signer/README.zh-CN.md)。
 
 ### Resin 粘性代理
 

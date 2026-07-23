@@ -45,6 +45,19 @@ func TestSettingsResponseIncludesBuildTokenAuth(t *testing.T) {
 	}
 }
 
+func TestSettingsResponseIncludesStatsigMaterialURL(t *testing.T) {
+	response := newSettingsResponse(settingsapp.Snapshot{Config: settingsapp.EditableConfig{ProviderWeb: settingsapp.ProviderWebConfig{
+		StatsigMode: "local", StatsigMaterialURL: "http://seed-hex-catch:8789/material",
+	}}})
+	data, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"statsigMaterialURL":"http://seed-hex-catch:8789/material"`) {
+		t.Fatalf("settings response lost Statsig material URL: %s", data)
+	}
+}
+
 func TestSettingsResponseIncludesRecommendedBuildBaseline(t *testing.T) {
 	response := newSettingsResponse(settingsapp.Snapshot{RecommendedProviderBuild: settingsapp.ProviderBuildRecommendation{
 		ClientVersion: "0.2.106", UserAgent: "grok-shell/0.2.106 (linux; x86_64)",

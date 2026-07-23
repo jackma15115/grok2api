@@ -41,6 +41,7 @@ type ProviderWebConfig struct {
 	StatsigManualValue      string
 	StatsigManualConfigured bool
 	StatsigSignerURL        string
+	StatsigMaterialURL      string
 	ClearanceMode           string
 	FlareSolverrURL         string
 	ClearanceTimeout        string
@@ -317,7 +318,7 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 	}
 	base.Provider.Web = config.WebProviderConfig{
 		BaseURL: value.ProviderWeb.BaseURL, QuotaTimeout: config.Duration(value.ProviderWeb.QuotaTimeout),
-		StatsigMode: value.ProviderWeb.StatsigMode, StatsigManualValue: value.ProviderWeb.StatsigManualValue, StatsigSignerURL: value.ProviderWeb.StatsigSignerURL,
+		StatsigMode: value.ProviderWeb.StatsigMode, StatsigManualValue: value.ProviderWeb.StatsigManualValue, StatsigSignerURL: value.ProviderWeb.StatsigSignerURL, StatsigMaterialURL: value.ProviderWeb.StatsigMaterialURL,
 		ClearanceMode: clearanceMode, FlareSolverrURL: flareSolverrURL,
 		ClearanceTimeout: config.Duration(clearanceTimeout), ClearanceRefresh: config.Duration(clearanceRefresh),
 		ChatTimeout: config.Duration(value.ProviderWeb.ChatTimeout), ImageTimeout: config.Duration(value.ProviderWeb.ImageTimeout),
@@ -402,8 +403,9 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 		ProviderWeb: settingsdomain.ProviderWebConfig{
 			BaseURL: value.Provider.Web.BaseURL, QuotaTimeout: value.Provider.Web.QuotaTimeout.Value(),
 			StatsigMode: value.Provider.Web.StatsigMode, StatsigManualValue: value.Provider.Web.StatsigManualValue,
-			StatsigSignerURL: value.Provider.Web.StatsigSignerURL,
-			ClearanceMode:    value.Provider.Web.ClearanceMode, FlareSolverrURL: value.Provider.Web.FlareSolverrURL,
+			StatsigSignerURL:   value.Provider.Web.StatsigSignerURL,
+			StatsigMaterialURL: value.Provider.Web.StatsigMaterialURL,
+			ClearanceMode:      value.Provider.Web.ClearanceMode, FlareSolverrURL: value.Provider.Web.FlareSolverrURL,
 			ClearanceTimeout: value.Provider.Web.ClearanceTimeout.Value(), ClearanceRefresh: value.Provider.Web.ClearanceRefresh.Value(),
 			ChatTimeout: value.Provider.Web.ChatTimeout.Value(), ImageTimeout: value.Provider.Web.ImageTimeout.Value(),
 			VideoTimeout:     value.Provider.Web.VideoTimeout.Value(),
@@ -485,6 +487,7 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 	next.Provider.Web.BaseURL = strings.TrimSpace(input.ProviderWeb.BaseURL)
 	next.Provider.Web.StatsigMode = strings.TrimSpace(input.ProviderWeb.StatsigMode)
 	next.Provider.Web.StatsigSignerURL = strings.TrimSpace(input.ProviderWeb.StatsigSignerURL)
+	next.Provider.Web.StatsigMaterialURL = strings.TrimSpace(input.ProviderWeb.StatsigMaterialURL)
 	if input.ProviderWeb.ClearanceProvided {
 		next.Provider.Web.ClearanceMode = strings.TrimSpace(input.ProviderWeb.ClearanceMode)
 		next.Provider.Web.FlareSolverrURL = strings.TrimSpace(input.ProviderWeb.FlareSolverrURL)
@@ -589,8 +592,9 @@ func toEditable(cfg config.Config) EditableConfig {
 		ProviderWeb: ProviderWebConfig{
 			BaseURL: cfg.Provider.Web.BaseURL, QuotaTimeout: cfg.Provider.Web.QuotaTimeout.String(),
 			StatsigMode: cfg.Provider.Web.StatsigMode, StatsigManualConfigured: strings.TrimSpace(cfg.Provider.Web.StatsigManualValue) != "",
-			StatsigSignerURL: cfg.Provider.Web.StatsigSignerURL,
-			ClearanceMode:    cfg.Provider.Web.ClearanceMode, FlareSolverrURL: cfg.Provider.Web.FlareSolverrURL,
+			StatsigSignerURL:   cfg.Provider.Web.StatsigSignerURL,
+			StatsigMaterialURL: cfg.Provider.Web.StatsigMaterialURL,
+			ClearanceMode:      cfg.Provider.Web.ClearanceMode, FlareSolverrURL: cfg.Provider.Web.FlareSolverrURL,
 			ClearanceTimeout: cfg.Provider.Web.ClearanceTimeout.String(), ClearanceRefresh: cfg.Provider.Web.ClearanceRefresh.String(),
 			ChatTimeout: cfg.Provider.Web.ChatTimeout.String(), ImageTimeout: cfg.Provider.Web.ImageTimeout.String(),
 			VideoTimeout:     cfg.Provider.Web.VideoTimeout.String(),
