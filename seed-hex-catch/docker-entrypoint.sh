@@ -2,7 +2,7 @@
 set -eu
 
 cd /app
-python3 -u flaresolverr.py &
+PORT=8191 python3 -u flaresolverr.py &
 flare_pid=$!
 
 ready=false

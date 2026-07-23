@@ -25,6 +25,6 @@ RUN chown -R flaresolverr:flaresolverr /opt/seed-hex-catch
 USER flaresolverr
 EXPOSE 8789
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
-  CMD curl -fsS http://127.0.0.1:8789/healthz >/dev/null || exit 1
+  CMD node -e "fetch('http://127.0.0.1:'+process.env.CATCH_PORT+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 ENTRYPOINT ["/usr/local/bin/seed-hex-catch-entrypoint"]

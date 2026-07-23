@@ -151,16 +151,18 @@ export class SVGMaterialCollector {
 
       const refreshedAt = new Date();
       const expiresAt = new Date(refreshedAt.getTime() + Math.max(this.refreshIntervalMs + 120_000, 180_000));
-      this.material = {
+      const nextMaterial = Object.freeze({
         seed,
         hex,
         refreshedAt: refreshedAt.toISOString(),
         expiresAt: expiresAt.toISOString(),
         pathVersion: createHash("sha256").update(pathMaterial.join("\n")).digest("hex"),
         pathCount: pathMaterial.length,
-      };
+      });
+      // Publish the validated seed/HEX pair with one reference replacement.
+      this.material = nextMaterial;
       this.state.lastError = null;
-      return this.material;
+      return nextMaterial;
     } catch (error) {
       this.state.lastError = error instanceof Error ? error.message : String(error);
       return null;

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -75,6 +76,53 @@ func TestLocalStatsigFallsBackWhenRemoteMaterialFails(t *testing.T) {
 	if err != nil || source != "cache" || fetches != 1 {
 		t.Fatalf("cached fallback source=%q fetches=%d err=%v", source, fetches, err)
 	}
+}
+
+func TestLocalStatsigMaterialCacheReplacesPairsAtomically(t *testing.T) {
+	signer := newStatsigSigner()
+	key := "http://seed-hex-catch:8789/material"
+	expiresAt := time.Now().Add(time.Hour)
+	first := localStatsigMaterial{seed: make([]byte, 48), hex: "aa"}
+	second := localStatsigMaterial{seed: make([]byte, 48), hex: "bb"}
+	for index := range second.seed {
+		second.seed[index] = 0xff
+	}
+	signer.storeLocalMaterial(key, first, expiresAt)
+
+	var wait sync.WaitGroup
+	wait.Add(5)
+	go func() {
+		defer wait.Done()
+		for index := 0; index < 10_000; index++ {
+			if index%2 == 0 {
+				signer.storeLocalMaterial(key, second, expiresAt)
+			} else {
+				signer.storeLocalMaterial(key, first, expiresAt)
+			}
+		}
+	}()
+	for range 4 {
+		go func() {
+			defer wait.Done()
+			for range 10_000 {
+				material, ok := signer.cachedLocalMaterial(key, time.Now())
+				if !ok {
+					t.Error("material disappeared during replacement")
+					return
+				}
+				allZero, allFF := true, true
+				for _, value := range material.seed {
+					allZero = allZero && value == 0
+					allFF = allFF && value == 0xff
+				}
+				if (material.hex != "aa" || !allZero) && (material.hex != "bb" || !allFF) {
+					t.Errorf("observed mixed material pair: hex=%q seed=%x", material.hex, material.seed)
+					return
+				}
+			}
+		}()
+	}
+	wait.Wait()
 }
 
 func TestGenerateLocalStatsigProducesFreshSeventyByteValues(t *testing.T) {

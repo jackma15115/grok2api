@@ -38,3 +38,35 @@ test("returns 503 until a complete capture is ready", async () => {
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test("serves only complete material snapshots while a refresh is in flight", async () => {
+  const oldMaterial = { seed: "old-seed", hex: "old-hex", refreshedAt: "old", expiresAt: "later", pathVersion: "old-v", pathCount: 4 };
+  const newMaterial = { seed: "new-seed", hex: "new-hex", refreshedAt: "new", expiresAt: "later", pathVersion: "new-v", pathCount: 4 };
+  let material = oldMaterial;
+  let refreshInFlight = false;
+  let finishRefresh;
+  const refreshGate = new Promise((resolve) => { finishRefresh = resolve; });
+  const collector = {
+    status: () => ({ ready: true, refreshInFlight, lastError: null, material }),
+    refresh: async () => {
+      refreshInFlight = true;
+      await refreshGate;
+      material = newMaterial;
+      refreshInFlight = false;
+      return material;
+    },
+  };
+  const server = createServer({ collector, apiToken: "secret" });
+  const baseURL = await listen(server);
+  try {
+    const refresh = fetch(`${baseURL}/refresh`, { method: "POST", headers: { authorization: "Bearer secret" } });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(await (await fetch(`${baseURL}/material`, { headers: { authorization: "Bearer secret" } })).json(), oldMaterial);
+
+    finishRefresh();
+    assert.equal((await refresh).status, 200);
+    assert.deepEqual(await (await fetch(`${baseURL}/material`, { headers: { authorization: "Bearer secret" } })).json(), newMaterial);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

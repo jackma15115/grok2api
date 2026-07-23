@@ -32,6 +32,7 @@ services:
     environment:
       TZ: "${TZ:-Asia/Shanghai}"
       LOG_LEVEL: "${FLARESOLVERR_LOG_LEVEL:-info}"
+      PORT: "8191"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8191/health"]
       interval: 10s

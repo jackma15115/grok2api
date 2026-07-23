@@ -94,13 +94,17 @@ func (s *statsigSigner) cachedLocalMaterial(key string, now time.Time) (localSta
 	if !ok || len(entry.material.seed) != 48 || entry.material.hex == "" || !now.Before(entry.expiresAt) {
 		return localStatsigMaterial{}, false
 	}
-	return entry.material, true
+	return cloneLocalStatsigMaterial(entry.material), true
 }
 
 func (s *statsigSigner) storeLocalMaterial(key string, material localStatsigMaterial, expiresAt time.Time) {
 	s.mu.Lock()
-	s.localMaterials[key] = localStatsigMaterialEntry{material: material, expiresAt: expiresAt}
+	s.localMaterials[key] = localStatsigMaterialEntry{material: cloneLocalStatsigMaterial(material), expiresAt: expiresAt}
 	s.mu.Unlock()
+}
+
+func cloneLocalStatsigMaterial(material localStatsigMaterial) localStatsigMaterial {
+	return localStatsigMaterial{seed: append([]byte(nil), material.seed...), hex: material.hex}
 }
 
 func (s *statsigSigner) InvalidateLocal(materialURL string) {
