@@ -188,7 +188,7 @@ docker compose logs -f grok2api
 | `docker-compose.warp-flaresolverr.yml` | Grok2API + WARP + FlareSolverr | `docker compose -f docker-compose.warp-flaresolverr.yml up -d` |
 | `docker-compose.all.yml` | Grok2API + WARP + FlareSolverr + Statsig signer | `docker compose -f docker-compose.all.yml up -d` |
 | `docker-compose.statsig-signer.yml` | 公共 Statsig signer + FlareSolverr，不启动 Grok2API | `docker compose -f docker-compose.statsig-signer.yml up -d` |
-| `docker-compose.seed-hex-catch.yml` | 内置 FlareSolverr 的 SVG seed/HEX 采集服务 | `docker compose -f docker-compose.seed-hex-catch.yml up -d` |
+| `docker-compose.seed-hex-catch.yml` | 内置 FlareSolverr 的 SVG seed/HEX 采集与边缘签名服务 | `docker compose -f docker-compose.seed-hex-catch.yml up -d` |
 
 带 WARP 的版本可在 Compose 网络内使用 `socks5://warp:1080`，需要在 Grok2API 运行设置中将它配置为出口代理。独立 signer 会发布 `8787` 端口，公网部署时应增加访问控制和限流。
 
@@ -312,7 +312,7 @@ curl http://127.0.0.1:8000/v1/responses \
 
 仓库包含一个 Playwright 驱动的实验性 Statsig 签名服务。它使用真实 Grok 页面校准 `seed/HEX`，通过浏览器样本校验后再提供兼容的 `/sign` 接口：
 
-内置 `Local` 模式使用随程序提供的材料快照。它可以选择从 `seed-hex-catch` 拉取最新 seed/HEX；服务不可用或材料无效时，Local 会自动回退内置快照。
+`seed-hex-catch` 使用当前浏览器采集的 seed/HEX，同时提供兼容的 `/sign` 接口和 `/material` 接口。当前材料没有过期时间，每次成功采集后原子替换。
 
 如需运行独立 SVG 采集服务，并将 FlareSolverr 打包在同一镜像内：
 
@@ -320,7 +320,7 @@ curl http://127.0.0.1:8000/v1/responses \
 docker compose -f docker-compose.seed-hex-catch.yml up -d
 ```
 
-两个容器共享网络时，在管理端选择 `Local` 模式并将 Material 服务 URL 填写为 `http://seed-hex-catch:8789/material`。完整配置见 [seed-hex-catch/README.zh-CN.md](seed-hex-catch/README.zh-CN.md)。
+两个容器共享网络时，可以在管理端选择 `URL` 模式并填写 `http://seed-hex-catch:8789/sign`，也可以选择 `Local` 模式并填写 `http://seed-hex-catch:8789/material`。完整配置见 [seed-hex-catch/README.zh-CN.md](seed-hex-catch/README.zh-CN.md)。
 
 ```bash
 docker compose -f docker-compose.all.yml up -d

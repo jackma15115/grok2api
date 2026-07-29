@@ -6,8 +6,9 @@ const port = Number(process.env.CATCH_PORT ?? 8789);
 const apiToken = String(process.env.CATCH_API_TOKEN ?? "").trim();
 const refreshIntervalMs = Number(process.env.CATCH_REFRESH_INTERVAL_MS ?? 600_000);
 const retryIntervalMs = Number(process.env.CATCH_RETRY_INTERVAL_MS ?? 15_000);
-const collector = new SVGMaterialCollector({ refreshIntervalMs });
-const server = createServer({ collector, apiToken });
+const maxBodyBytes = Number(process.env.CATCH_MAX_BODY_BYTES ?? 64 * 1024);
+const collector = new SVGMaterialCollector();
+const server = createServer({ collector, apiToken, maxBodyBytes });
 let timer;
 
 async function refreshAndSchedule() {

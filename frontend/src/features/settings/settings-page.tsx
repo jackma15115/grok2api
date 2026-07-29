@@ -136,7 +136,7 @@ export function SettingsPage() {
                 </SettingsField>
               ) : statsigMode === "url" ? (
                 <SettingsField controlId="web-statsig-url" className="sm:col-span-2" label={t("settings.web.statsigSignerURL")} description={t("settings.web.statsigSignerURLHelp")} error={form.formState.errors.providerWeb?.statsigSignerURL?.message}>
-                  <Input id="web-statsig-url" type="url" placeholder="http://grok-signer-go:8788/sign" {...form.register("providerWeb.statsigSignerURL")} />
+                  <Input id="web-statsig-url" type="url" placeholder="http://seed-hex-catch:8789/sign" {...form.register("providerWeb.statsigSignerURL")} />
                 </SettingsField>
               ) : statsigMode === "local" ? (
                 <SettingsField controlId="web-statsig-material-url" className="sm:col-span-2" label={t("statsigMaterialURL")} description={t("statsigMaterialURLHelp")} error={form.formState.errors.providerWeb?.statsigMaterialURL?.message}>

@@ -1,4 +1,4 @@
-function decodeSeed(value) {
+export function decodeSeed(value) {
   const normalized = String(value ?? "").trim().replace(/-/g, "+").replace(/_/g, "/");
   if (!normalized || !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) throw new Error("seed is not valid base64");
   const seed = Buffer.from(normalized, "base64");

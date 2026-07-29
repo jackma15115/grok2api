@@ -3,12 +3,13 @@
 [English](README.md) | 简体中文
 
 `seed-hex-catch` 会定期观察 Grok Statsig 模块使用的瞬时 SVG path，读取运行时
-实际选用的 seed 和浏览器已计算的动画样式，独立编码 HEX，并通过 JSON 接口提供材料。它不会捕获
-`x-statsig-id` 请求，也不会 hook Web Crypto 的 SHA 输入。
+实际选用的 seed 和浏览器已计算的动画样式，独立编码 HEX，并使用当前浏览器采集的
+材料提供与 `grok.wodf.de/sign` 兼容的签名接口。
 
-发布镜像在同一个容器内包含 FlareSolverr、Chromium、Playwright 和采集器。
-服务启动时立即刷新，之后默认每 10 分钟刷新一次。每轮只在全新的浏览器上下文中
-打开一个自然页面，将 seed、实际选中的 SVG path 和 computed style 配对后关闭浏览器。
+发布镜像在同一个容器内包含 FlareSolverr、Chromium、Playwright 和采集器。浏览器采集器
+不会 hook 自然产生的 `x-statsig-id` 请求或 Web Crypto SHA 输入。服务启动时立即刷新，
+之后默认每 10 分钟刷新一次。每轮只在全新的浏览器上下文中打开一个自然页面，将 seed、
+实际选中的 SVG path 和 computed style 配对后关闭浏览器。
 
 ## 启动
 
@@ -24,12 +25,23 @@ docker run -d --name seed-hex-catch --restart unless-stopped --init --security-o
 docker compose -f docker-compose.seed-hex-catch.yml up -d
 ```
 
-Material 接口为 `http://HOST:8789/material`。在 Grok2API 中选择 Statsig
-`Local` 模式，并将 Material 服务 URL 填写为：
+Grok2API 支持以下两种接入模式：
+
+- 选择 `URL` 模式，将签名服务 URL 填写为：
+
+```text
+http://seed-hex-catch:8789/sign
+```
+
+- 选择 `Local` 模式，将 Material 服务 URL 填写为：
 
 ```text
 http://seed-hex-catch:8789/material
 ```
+
+`URL` 模式将签名生成留在 `seed-hex-catch`；`Local` 模式获取同一组当前 seed/HEX，
+在 Grok2API 内生成。首次成功采集后，当前材料没有过期时间；后续成功采集会原子替换，
+刷新失败则继续保留当前材料。
 
 不同 Compose project 默认不共享 DNS 网络。可以填写宿主机地址，或者将两个
 服务接入同一个外部 Docker 网络。
@@ -37,11 +49,13 @@ http://seed-hex-catch:8789/material
 ## API
 
 - `GET /healthz` 返回就绪状态、时间、path 数量和 path 版本。
-- `GET /material` 返回 `seed`、`hex`、刷新时间和 path 元数据。
+- `POST /sign` 接受兼容的 `method`、`path` 和可选 `environment` 请求体，返回
+  `{"x-statsig-id":"..."}`。
+- `GET /material` 返回当前 `seed`、`hex`、刷新时间和 path 元数据。
 - `POST /refresh` 在设置 `CATCH_API_TOKEN` 后立即触发一次采集。
 
-`CATCH_API_TOKEN` 使用 Bearer Token 保护 `/material` 并启用 `/refresh`。
-留空时 `/material` 公开可读，手动刷新接口禁用。Grok2API 当前不会发送该 Token，
+`CATCH_API_TOKEN` 使用 Bearer Token 保护 `/sign` 和 `/material`，并启用 `/refresh`。
+留空时 `/sign` 和 `/material` 公开可用，手动刷新接口禁用。Grok2API 当前不会发送该 Token，
 因此直连时应留空，或者由可信反向代理补充认证。
 
 ## 配置
@@ -55,6 +69,7 @@ http://seed-hex-catch:8789/material
 | `CATCH_BROWSER_TIMEOUT_MS` | `60000` | 单个页面的 path 捕获超时 |
 | `CATCH_PAGE_SETTLE_MS` | `5000` | 等待运行时 seed/style 配对稳定的时间 |
 | `CATCH_PROXY_URL` | 空 | FlareSolverr 与 Chromium 共用的 HTTP(S)/SOCKS5 出口 |
+| `CATCH_MAX_BODY_BYTES` | `65536` | `/sign` 请求体大小上限 |
 | `CATCH_API_TOKEN` | 空 | 可选的 API Bearer Token |
 
 Compose 默认提供 128 MiB 共享内存。如果宿主机 Chromium 版本需要更多空间，

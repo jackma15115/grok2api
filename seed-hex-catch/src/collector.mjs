@@ -3,6 +3,7 @@ import { chromium } from "playwright";
 
 import { solveFlareSolverr } from "./flaresolverr.mjs";
 import { computeStyleHEX, validateMaterial } from "./hex.mjs";
+import { currentMaterialStatus } from "./material.mjs";
 
 function parseProxy(value) {
   const raw = String(value ?? "").trim();
@@ -88,19 +89,13 @@ export class SVGMaterialCollector {
     this.executablePath = options.executablePath ?? process.env.CATCH_BROWSER_EXECUTABLE_PATH ?? "";
     this.proxyURL = options.proxyURL ?? process.env.CATCH_PROXY_URL ?? "";
     this.headless = options.headless ?? process.env.CATCH_HEADLESS !== "false";
-    this.refreshIntervalMs = options.refreshIntervalMs ?? Number(process.env.CATCH_REFRESH_INTERVAL_MS ?? 600_000);
     this.material = null;
     this.refreshPromise = null;
     this.state = { refreshInFlight: false, lastError: null, lastAttemptAt: null };
   }
 
   status() {
-    const now = Date.now();
-    return {
-      ...this.state,
-      ready: Boolean(this.material && Date.parse(this.material.expiresAt) > now),
-      material: this.material,
-    };
+    return currentMaterialStatus(this.material, this.state);
   }
 
   refresh() {
@@ -149,13 +144,10 @@ export class SVGMaterialCollector {
       const pathMaterial = completePaths ? style.paths : selectedPath ? [selectedPath] : [];
       if (!pathMaterial.length) throw new Error("natural Statsig SVG path was not observed");
 
-      const refreshedAt = new Date();
-      const expiresAt = new Date(refreshedAt.getTime() + Math.max(this.refreshIntervalMs + 120_000, 180_000));
       const nextMaterial = Object.freeze({
         seed,
         hex,
-        refreshedAt: refreshedAt.toISOString(),
-        expiresAt: expiresAt.toISOString(),
+        refreshedAt: new Date().toISOString(),
         pathVersion: createHash("sha256").update(pathMaterial.join("\n")).digest("hex"),
         pathCount: pathMaterial.length,
       });
