@@ -741,8 +741,12 @@ func TestBuildDirectFileUploadBodySanitizesUnsafeFilename(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if part.FormName() != "file" || part.FileName() != "a\\b\"c_.png" {
-		t.Fatalf("form name=%q filename=%q", part.FormName(), part.FileName())
+	disposition, parameters, err := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disposition != "form-data" || parameters["name"] != "file" || parameters["filename"] != "a\\b\"c_.png" {
+		t.Fatalf("disposition=%q parameters=%#v", disposition, parameters)
 	}
 }
 

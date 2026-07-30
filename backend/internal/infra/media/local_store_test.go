@@ -41,6 +41,32 @@ func TestLocalStoreWritesAndRejectsTraversal(t *testing.T) {
 	}
 }
 
+func TestLocalStoreCommitsVideoUpload(t *testing.T) {
+	store, err := NewLocalStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tempPath, key, err := store.BeginVideoUpload(context.Background(), "video_abcdefghijklmnopqrstuvwxyz", "video/mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tempPath, []byte("video"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CommitVideoUpload(context.Background(), tempPath, key); err != nil {
+		t.Fatal(err)
+	}
+	body, err := store.Open(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, readErr := io.ReadAll(body)
+	_ = body.Close()
+	if readErr != nil || string(data) != "video" {
+		t.Fatalf("committed video = %q, err = %v", data, readErr)
+	}
+}
+
 func TestLocalStoreRetriesTemporaryCleanupWithoutDeletingCommittedImage(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewLocalStore(root)

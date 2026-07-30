@@ -284,7 +284,7 @@ func TestNormalizeRequestPreservesGrok420ReasoningEffort(t *testing.T) {
 		"model":"grok-4.20-0309-reasoning",
 		"input":"hello",
 		"reasoning":{"effort":"low"}
-	}`), spec)
+	}`), spec, Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestNormalizeRequestPreservesGrok420ReasoningEffort(t *testing.T) {
 	withoutEffort, err := normalizeRequest([]byte(`{
 		"model":"grok-4.20-0309-reasoning",
 		"input":"hello"
-	}`), spec)
+	}`), spec, Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
