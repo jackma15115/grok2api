@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -46,6 +47,7 @@ const (
 type Handler struct {
 	service *accountapp.Service
 	sync    accountSynchronizer
+	logger  *slog.Logger
 }
 
 type accountSyncPipeline struct {
@@ -60,7 +62,13 @@ type accountSyncPipeline struct {
 }
 
 func NewHandler(service *accountapp.Service, sync accountSynchronizer) *Handler {
-	return &Handler{service: service, sync: sync}
+	return &Handler{service: service, sync: sync, logger: slog.Default()}
+}
+
+func (h *Handler) SetLogger(logger *slog.Logger) {
+	if logger != nil {
+		h.logger = logger
+	}
 }
 
 func (h *Handler) startSyncPipeline(parent context.Context, progress func(completed, total int)) *accountSyncPipeline {
@@ -1075,6 +1083,7 @@ func (h *Handler) refreshWebQuota(c *gin.Context) {
 		return
 	}
 	if _, err := h.service.RefreshQuota(c.Request.Context(), id); err != nil {
+		h.logQuotaRefreshFailure(c, id, err)
 		h.writeServiceError(c, "quotaRefreshFailed", err, http.StatusBadGateway, "同步 Provider 额度失败")
 		return
 	}
@@ -1084,6 +1093,21 @@ func (h *Handler) refreshWebQuota(c *gin.Context) {
 		return
 	}
 	response.Success(c, http.StatusOK, newAccountResponse(value))
+}
+
+func (h *Handler) logQuotaRefreshFailure(c *gin.Context, accountID uint64, err error) {
+	logger := h.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	requestID, _ := c.Get("requestId")
+	logger.Error("account_quota_refresh_failed",
+		"request_id", requestID,
+		"account_id", accountID,
+		"status", http.StatusBadGateway,
+		"error_code", "quotaRefreshFailed",
+		"error", err,
+	)
 }
 
 func (h *Handler) exportCredentials(c *gin.Context) {

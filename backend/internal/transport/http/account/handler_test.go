@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"mime/multipart"
 	"net/http/httptest"
 	"path/filepath"
@@ -93,6 +94,32 @@ func TestWriteServiceErrorUsesCredentialLimitCodes(t *testing.T) {
 				t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 			}
 		})
+	}
+}
+
+func TestLogQuotaRefreshFailureIncludesRequestContextAndCause(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var output bytes.Buffer
+	handler := NewHandler(nil, nil)
+	handler.SetLogger(slog.New(slog.NewTextHandler(&output, nil)))
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("requestId", "request-quota-1")
+
+	handler.logQuotaRefreshFailure(ctx, 42, fmt.Errorf("Grok Web 额度接口返回 403"))
+
+	logLine := output.String()
+	for _, expected := range []string{
+		"level=ERROR",
+		"msg=account_quota_refresh_failed",
+		"request_id=request-quota-1",
+		"account_id=42",
+		"status=502",
+		"error_code=quotaRefreshFailed",
+		`error="Grok Web 额度接口返回 403"`,
+	} {
+		if !strings.Contains(logLine, expected) {
+			t.Fatalf("log %q does not include %q", logLine, expected)
+		}
 	}
 }
 
