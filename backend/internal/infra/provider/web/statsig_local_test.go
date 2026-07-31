@@ -125,21 +125,34 @@ func TestLocalStatsigMaterialCacheReplacesPairsAtomically(t *testing.T) {
 	wait.Wait()
 }
 
-func TestGenerateLocalStatsigProducesFreshSeventyByteValues(t *testing.T) {
+// TestGenerateLocalStatsigProducesSeventyByteValue 验证本地生成入口输出协议要求的固定长度。
+func TestGenerateLocalStatsigProducesSeventyByteValue(t *testing.T) {
 	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
-	first, err := generateLocalStatsig("/rest/rate-limits", "post", now)
+	value, err := generateLocalStatsig("/rest/rate-limits", "post", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := generateLocalStatsig("/rest/rate-limits", "POST", now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := base64.RawStdEncoding.DecodeString(first)
+	decoded, err := base64.RawStdEncoding.DecodeString(value)
 	if err != nil || len(decoded) != 70 {
 		t.Fatalf("decoded local Statsig length = %d, err = %v", len(decoded), err)
 	}
+	if decoded[69]^decoded[0] != statsigMark {
+		t.Fatalf("decoded local Statsig mark = %x", decoded[69]^decoded[0])
+	}
+}
+
+// TestBuildLocalStatsigChangesWithKey 使用确定性 key 验证随机掩码会改变完整签名。
+func TestBuildLocalStatsigChangesWithKey(t *testing.T) {
+	const nowUnix = statsigEpoch + 101790123
+	first, err := buildLocalStatsig(localStatsigSeed, localStatsigHEX, "/rest/rate-limits", "POST", nowUnix, 0x12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := buildLocalStatsig(localStatsigSeed, localStatsigHEX, "/rest/rate-limits", "POST", nowUnix, 0x34)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if first == second {
-		t.Fatal("two local Statsig values unexpectedly matched")
+		t.Fatal("different local Statsig keys produced the same value")
 	}
 }
