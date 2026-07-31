@@ -154,6 +154,7 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 	router.POST("/accounts/web/sync-to-console", h.syncWebToConsole)
 	router.POST("/accounts/web/run-scripts", h.runWebAccountScripts)
 	router.POST("/accounts/web/refresh-quotas", h.refreshAllWebQuotas)
+	router.POST("/accounts/web/:id/test", h.testWebAccount)
 	router.POST("/accounts/web/:id/accept-terms", h.acceptWebTerms)
 	router.POST("/accounts/web/:id/birth-date", h.setWebBirthDate)
 	router.POST("/accounts/web/:id/nsfw", h.enableWebNSFW)
@@ -257,6 +258,12 @@ type accountTokenRefreshResponse struct {
 	Succeeded int `json:"succeeded"`
 	Failed    int `json:"failed"`
 	Skipped   int `json:"skipped"`
+}
+
+type webAccountProbeResponse struct {
+	Status         string `json:"status"`
+	UpstreamStatus int    `json:"upstreamStatus"`
+	Reply          string `json:"reply,omitempty"`
 }
 
 type accountImportResponse struct {
@@ -1093,6 +1100,41 @@ func (h *Handler) refreshWebQuota(c *gin.Context) {
 		return
 	}
 	response.Success(c, http.StatusOK, newAccountResponse(value))
+}
+
+// testWebAccount 使用指定账号发送固定 hi 消息，区分凭据失效与临时上游故障。
+func (h *Handler) testWebAccount(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	startedAt := time.Now()
+	result, err := h.service.ProbeWebAccount(c.Request.Context(), id)
+	logger := h.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	requestID, _ := c.Get("requestId")
+	if err != nil {
+		logger.Error("web_account_probe_failed",
+			"request_id", requestID,
+			"account_id", id,
+			"duration_ms", time.Since(startedAt).Milliseconds(),
+			"error", err,
+		)
+		h.writeServiceError(c, "webAccountTestFailed", err, http.StatusBadGateway, "测试 Grok Web 账号失败")
+		return
+	}
+	logger.Info("web_account_probe_completed",
+		"request_id", requestID,
+		"account_id", id,
+		"outcome", result.Status,
+		"upstream_status", result.UpstreamStatus,
+		"duration_ms", time.Since(startedAt).Milliseconds(),
+	)
+	response.Success(c, http.StatusOK, webAccountProbeResponse{
+		Status: string(result.Status), UpstreamStatus: result.UpstreamStatus, Reply: result.Reply,
+	})
 }
 
 func (h *Handler) logQuotaRefreshFailure(c *gin.Context, accountID uint64, err error) {

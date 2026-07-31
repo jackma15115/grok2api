@@ -108,6 +108,12 @@ export type AccountDTO = {
   quotaWindows?: Array<{ mode: string; remaining: number; total: number; usagePercent: number; breakdown?: Array<{ productCode: number; usagePercent: number }>; windowSeconds: number; resetAt?: string; syncedAt?: string; source: "default" | "estimated" | "upstream" }>;
 };
 
+export type WebAccountTestResultDTO = {
+  status: "valid" | "invalid" | "inconclusive";
+  upstreamStatus: number;
+  reply?: string;
+};
+
 export type LinkedAccountDTO = {
   id: string;
   provider: "grok_build" | "grok_web" | "grok_console";
@@ -193,6 +199,9 @@ const accountValidator = hasShape({
 });
 const decodeBilling = createValidatedDecoder<BillingDTO>("billing", billingValidator);
 const decodeAccount = createValidatedDecoder<AccountDTO>("account", accountValidator);
+const decodeWebAccountTestResult = createObjectDecoder<WebAccountTestResultDTO>("web account test", {
+  status: isOneOf("valid", "invalid", "inconclusive"), upstreamStatus: isNumber, reply: isOptional(isString),
+});
 const decodeAccountPage = createPaginatedDecoder<AccountDTO>(accountValidator);
 const decodeAccountSummary = createObjectDecoder<AccountSummaryDTO>("account summary", {
   total: isNumber, available: isNumber, recovering: isNumber, attention: isNumber, risk: isNumber,
@@ -494,6 +503,10 @@ export function importConsoleAccounts(files: readonly File[], onProgress?: (valu
 
 export function refreshAccountQuota(id: string): Promise<AccountDTO> {
   return apiRequest(`/api/admin/v1/accounts/${id}/refresh-quota`, { method: "POST" }, decodeAccount);
+}
+
+export function testWebAccount(id: string): Promise<WebAccountTestResultDTO> {
+  return apiRequest(`/api/admin/v1/accounts/web/${id}/test`, { method: "POST" }, decodeWebAccountTestResult);
 }
 
 export type AccountExportBatch = {

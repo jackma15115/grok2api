@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, ClipboardPaste, Compass, Download, ExternalLink, FileUp, Link, MoreHorizontal, Pencil, Plus, RefreshCw, RotateCw, Search, SquareTerminal, Trash2, TriangleAlert, Webhook } from "lucide-react";
+import { ArrowRight, ClipboardPaste, Compass, Download, ExternalLink, FileUp, Link, MessageCircle, MoreHorizontal, Pencil, Plus, RefreshCw, RotateCw, Search, SquareTerminal, Trash2, TriangleAlert, Webhook } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
@@ -66,6 +66,7 @@ import {
   setWebAccountBirthDate,
   startDeviceAuthorization,
   syncWebAccountsToConsole,
+  testWebAccount,
   updateAccount,
   updateAccountsEnabled,
   updateAccountsMaxConcurrent,
@@ -437,6 +438,22 @@ export function AccountsPage() {
     onSuccess: () => {
       invalidateAccountData();
       toast.success(t("accounts.billingRefreshed"));
+    },
+    onError: showError,
+  });
+
+  const webAccountTestMutation = useMutation({
+    mutationFn: testWebAccount,
+    onSuccess: (result) => {
+      if (result.status === "valid") {
+        toast.success(t("webAccountTest.valid", { reply: result.reply || t("webAccountTest.noReply") }));
+        return;
+      }
+      if (result.status === "invalid") {
+        toast.error(t("webAccountTest.invalid", { status: result.upstreamStatus }));
+        return;
+      }
+      toast.warning(t("webAccountTest.inconclusive", { status: result.upstreamStatus }));
     },
     onError: showError,
   });
@@ -1285,6 +1302,7 @@ export function AccountsPage() {
                             />
                           ) : null}
                           {provider === "grok_build" ? <DropdownMenuItem onClick={() => tokenMutation.mutate(account.id)}><RotateCw />{t("accounts.refreshToken")}</DropdownMenuItem> : null}
+                          {provider === "grok_web" ? <DropdownMenuItem disabled={webAccountTestMutation.isPending} onClick={() => webAccountTestMutation.mutate(account.id)}><MessageCircle />{t("webAccountTest.action")}</DropdownMenuItem> : null}
                           <DropdownMenuItem onClick={() => provider === "grok_build" ? billingMutation.mutate(account.id) : quotaMutation.mutate(account.id)}><RefreshCw />{provider === "grok_build" ? t("accounts.refreshBilling") : t("accounts.refreshModeQuota")}</DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => { resetLinkedDeleteState(); setDeleting(account); }}><Trash2 />{t("common.delete")}</DropdownMenuItem>

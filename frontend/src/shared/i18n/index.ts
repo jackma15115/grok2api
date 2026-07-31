@@ -1060,6 +1060,7 @@ const resources = {
         minPassword: "密码至少需要 8 个字符",
         positive: "请输入大于 0 的数值",
       },
+      webAccountTest: { action: "测试对话", valid: "对话成功，账号凭据有效：{{reply}}", invalid: "对话被上游拒绝（HTTP {{status}}），账号凭据已失效或账号已被封禁", inconclusive: "上游返回 HTTP {{status}}，暂时无法判断账号凭据是否有效", noReply: "上游已接受请求" },
       apiErrors: {
         accountBatchDeleteFailed: "批量删除账号失败",
         accountCleanupFailed: "清理账号失败",
@@ -1073,6 +1074,7 @@ const resources = {
         accountUpdateFailed: "更新账号失败",
         webAccountScriptFailed: "执行 Grok Web 账号脚本失败",
         webAccountScriptBusy: "该账号正在执行账号脚本",
+        webAccountTestFailed: "测试 Grok Web 账号失败",
         webTermsAcceptanceFailed: "接受 Grok Web 服务协议失败",
         webBirthDateUpdateFailed: "设置 Grok Web 账号生日失败",
         webNSFWEnableFailed: "开启 Grok Web NSFW 失败",
@@ -1594,6 +1596,7 @@ const resources = {
       },
       quotaProducts: { thirdParty: "Third Party", api: "API", build: "Grok Build", plugins: "Grok Plugins", chat: "Chat", imagine: "Imagine", voice: "Voice", unknown: "Product {{code}}" },
       errors: { generic: "The operation failed. Please try again.", required: "This field is required", minPassword: "Password must contain at least 8 characters", positive: "Enter a value greater than zero" },
+      webAccountTest: { action: "Test chat", valid: "Chat succeeded; the credential is valid: {{reply}}", invalid: "The upstream rejected the chat (HTTP {{status}}); the credential is invalid or the account is blocked", inconclusive: "The upstream returned HTTP {{status}}; credential validity is currently inconclusive", noReply: "The upstream accepted the request" },
       apiErrors: {
         accountBatchDeleteFailed: "Failed to delete accounts",
         accountCleanupFailed: "Failed to clean up accounts",
@@ -1607,6 +1610,7 @@ const resources = {
         accountUpdateFailed: "Failed to update the account",
         webAccountScriptFailed: "Failed to run Grok Web account scripts",
         webAccountScriptBusy: "Account scripts are already running for this account",
+        webAccountTestFailed: "Failed to test the Grok Web account",
         webTermsAcceptanceFailed: "Failed to accept the Grok Web terms",
         webBirthDateUpdateFailed: "Failed to set the Grok Web account birth date",
         webNSFWEnableFailed: "Failed to enable Grok Web NSFW",
