@@ -16,7 +16,11 @@ var (
 	resetDurationPattern = regexp.MustCompile(`(?i)(\d+)\s*([dhms])`)
 )
 
-func normalizeRequest(body []byte, spec ModelSpec, cfg Config) ([]byte, error) {
+func normalizeRequest(body []byte, spec ModelSpec, configs ...Config) ([]byte, error) {
+	var cfg Config
+	if len(configs) > 0 {
+		cfg = configs[0]
+	}
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, fmt.Errorf("解析 Console Responses 请求: %w", err)
@@ -44,7 +48,7 @@ func normalizeRequest(body []byte, spec ModelSpec, cfg Config) ([]byte, error) {
 		return json.Marshal(payload)
 	}
 	retainedClientTools := normalizeConsoleTools(payload)
-	if cfg.NativeTools && spec.SearchTools {
+	if cfg.NativeTools {
 		mergeSearchTools(payload)
 	}
 	normalizeConsoleToolChoice(payload, retainedClientTools)
@@ -152,6 +156,15 @@ func normalizeReasoning(payload map[string]any, spec ModelSpec) {
 		}
 		reasoning = make(map[string]any)
 	}
+	if !spec.SupportsReasoningEffort {
+		delete(reasoning, "effort")
+		if len(reasoning) == 0 {
+			delete(payload, "reasoning")
+		} else {
+			payload["reasoning"] = reasoning
+		}
+		return
+	}
 	effort, _ := reasoning["effort"].(string)
 	effort = normalizeEffort(effort)
 	if effort == "" {
@@ -204,6 +217,8 @@ func ensureReasoningInclude(payload map[string]any) {
 func normalizeConsoleTools(payload map[string]any) bool {
 	value, exists := payload["tools"]
 	if !exists || value == nil {
+		delete(payload, "tools")
+		delete(payload, "tool_choice")
 		return false
 	}
 	tools, ok := value.([]any)
@@ -256,6 +271,7 @@ func normalizeConsoleTools(payload map[string]any) bool {
 	}
 	if len(result) == 0 {
 		delete(payload, "tools")
+		delete(payload, "tool_choice")
 		return false
 	}
 	payload["tools"] = result
@@ -269,8 +285,7 @@ func mergeSearchTools(payload map[string]any) {
 	}
 	positions := map[string]int{"web_search": 0, "x_search": 1}
 	result := append([]any(nil), defaults...)
-	if value, exists := payload["tools"]; exists && value != nil {
-		tools, _ := value.([]any)
+	if tools, _ := payload["tools"].([]any); len(tools) > 0 {
 		for _, tool := range tools {
 			identity := toolIdentity(tool)
 			if index, exists := positions[identity]; identity != "" && exists {
@@ -290,6 +305,10 @@ func mergeSearchTools(payload map[string]any) {
 }
 
 func normalizeConsoleToolChoice(payload map[string]any, retainedClientTools bool) {
+	if _, exists := payload["tools"]; !exists {
+		delete(payload, "tool_choice")
+		return
+	}
 	choice, exists := payload["tool_choice"]
 	if !exists {
 		payload["tool_choice"] = "auto"

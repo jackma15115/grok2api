@@ -62,9 +62,15 @@ var schemaIndexes = []string{
 	"CREATE INDEX IF NOT EXISTS idx_accounts_auto_clean_reauth ON provider_accounts(auth_status, reauth_marked_at, id)",
 	"CREATE INDEX IF NOT EXISTS idx_accounts_auto_clean_reauth_cursor ON provider_accounts(auth_status, enabled, id, reauth_marked_at)",
 	"CREATE INDEX IF NOT EXISTS idx_account_credentials_refresh_due ON account_credentials(refresh_due_at, account_id)",
+	"CREATE INDEX IF NOT EXISTS idx_account_credentials_build_bot_flag ON account_credentials(build_bot_flag_source, account_id)",
 	"CREATE INDEX IF NOT EXISTS idx_quota_windows_due ON account_quota_windows(remaining, reset_at, account_id)",
-	"CREATE UNIQUE INDEX IF NOT EXISTS idx_model_routes_public_id ON model_routes(public_id)",
+	"CREATE INDEX IF NOT EXISTS idx_model_routes_public_id_lookup ON model_routes(public_id)",
+	// Catalog/discovered rows remain idempotent per API capability. One public
+	// image model may intentionally serve both generation and editing, while
+	// manual rows may still share a public ID and form a route-target pool.
+	"CREATE UNIQUE INDEX IF NOT EXISTS uidx_model_routes_managed_public_capability ON model_routes(public_id, capability) WHERE origin IN ('catalog', 'discovered')",
 	"CREATE INDEX IF NOT EXISTS idx_model_routes_provider_upstream ON model_routes(provider, upstream_model)",
+	"CREATE INDEX IF NOT EXISTS idx_model_routes_grouping ON model_routes(provider, public_id, upstream_model, origin, id)",
 	"CREATE INDEX IF NOT EXISTS idx_model_routes_created_id ON model_routes(created_at DESC, id DESC)",
 	"CREATE INDEX IF NOT EXISTS idx_model_routes_enabled ON model_routes(enabled, public_id, id)",
 	"CREATE INDEX IF NOT EXISTS idx_model_route_aliases_route ON model_route_aliases(model_route_id, alias)",
@@ -72,6 +78,7 @@ var schemaIndexes = []string{
 	"CREATE INDEX IF NOT EXISTS idx_account_model_quota_blocks_due ON account_model_quota_blocks(cooldown_until, account_id)",
 	"CREATE INDEX IF NOT EXISTS idx_client_keys_created_id ON client_keys(created_at DESC, id DESC)",
 	"CREATE INDEX IF NOT EXISTS idx_client_keys_status ON client_keys(enabled, expires_at, created_at DESC, id DESC)",
+	"CREATE UNIQUE INDEX IF NOT EXISTS idx_client_keys_internal_kind ON client_keys(internal_kind) WHERE internal_kind IS NOT NULL",
 	"CREATE INDEX IF NOT EXISTS idx_client_key_models_route_key ON client_key_models(model_route_id, client_key_id)",
 	"CREATE INDEX IF NOT EXISTS idx_billing_reservations_expiry ON billing_reservations(expires_at, client_key_id)",
 	"CREATE INDEX IF NOT EXISTS idx_egress_nodes_scope_health ON egress_nodes(scope, enabled, health DESC, id ASC)",
@@ -86,6 +93,7 @@ var schemaIndexes = []string{
 	"CREATE INDEX IF NOT EXISTS idx_response_ownership_expires_id ON response_ownership(expires_at, response_id)",
 	"CREATE INDEX IF NOT EXISTS idx_response_ownership_account ON response_ownership(account_id)",
 	"CREATE INDEX IF NOT EXISTS idx_response_ownership_client_key ON response_ownership(client_key_id)",
+	"CREATE INDEX IF NOT EXISTS idx_response_ownership_route ON response_ownership(model_route_id)",
 	"CREATE INDEX IF NOT EXISTS idx_web_response_states_expires_id ON web_response_states(expires_at, response_id)",
 	"CREATE INDEX IF NOT EXISTS idx_web_response_states_account ON web_response_states(account_id, created_at DESC)",
 	"CREATE INDEX IF NOT EXISTS idx_media_jobs_client_created ON media_jobs(client_key_id, created_at DESC)",
@@ -94,6 +102,7 @@ var schemaIndexes = []string{
 	"CREATE INDEX IF NOT EXISTS idx_media_jobs_usage_recovery ON media_jobs(status, usage_recorded_at, completed_at, id)",
 	"CREATE INDEX IF NOT EXISTS idx_media_assets_created ON media_assets(created_at DESC, id)",
 	"CREATE INDEX IF NOT EXISTS idx_media_assets_kind_created ON media_assets(kind, created_at DESC, id)",
+	"CREATE INDEX IF NOT EXISTS idx_media_assets_expires ON media_assets(expires_at, id) WHERE expires_at IS NOT NULL",
 	"CREATE INDEX IF NOT EXISTS idx_media_upload_tickets_expires ON media_upload_tickets(expires_at, consumed_at)",
 	"CREATE INDEX IF NOT EXISTS idx_media_jobs_result_asset ON media_jobs(result_asset_id) WHERE result_asset_id <> ''",
 	// Pending input metadata rows only; keeps startup backfill scans off the full table after migration completes.
@@ -146,8 +155,14 @@ func (d *Database) initializeSchema(ctx context.Context) error {
 	if err := d.migrateBuildResponseHeaderTimeout(ctx); err != nil {
 		return fmt.Errorf("迁移 Grok Build 响应头超时: %w", err)
 	}
+	if err := d.migrateProviderStreamIdleTimeouts(ctx); err != nil {
+		return fmt.Errorf("迁移 Provider 流式空闲超时: %w", err)
+	}
 	if err := d.ensureConsoleConstraints(ctx); err != nil {
 		return fmt.Errorf("迁移 Console 数据库约束: %w", err)
+	}
+	if err := d.ensureEgressAssetScopeConstraints(ctx); err != nil {
+		return fmt.Errorf("迁移资源出口数据库约束: %w", err)
 	}
 	if err := d.ensureAuditOperationConstraints(ctx); err != nil {
 		return fmt.Errorf("迁移请求审计操作约束: %w", err)
@@ -186,6 +201,9 @@ func (d *Database) initializeSchema(ctx context.Context) error {
 	}
 	if err := d.dropProviderUpstreamUniqueIndex(ctx); err != nil {
 		return fmt.Errorf("迁移模型路由上游唯一约束: %w", err)
+	}
+	if err := d.dropModelPublicIDUniqueIndex(ctx); err != nil {
+		return fmt.Errorf("迁移模型路由名称唯一约束: %w", err)
 	}
 	for _, statement := range schemaIndexes {
 		if err := db.Exec(statement).Error; err != nil {
@@ -251,6 +269,59 @@ func (d *Database) migrateBuildResponseHeaderTimeout(ctx context.Context) error 
 	return errors.New("runtime settings changed repeatedly during migration")
 }
 
+// migrateProviderStreamIdleTimeouts persists runtime defaults for settings rows
+// created before provider stream idle timeouts became configurable.
+func (d *Database) migrateProviderStreamIdleTimeouts(ctx context.Context) error {
+	db := d.db.WithContext(ctx)
+	for range 4 {
+		var row runtimeSettingsModel
+		if err := db.Where("key = ?", runtimeSettingsKey).First(&row).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			return err
+		}
+		var payload runtimeSettingsPayload
+		if err := json.Unmarshal([]byte(row.ValueJSON), &payload); err != nil {
+			return fmt.Errorf("decode runtime settings: %w", err)
+		}
+		changed := false
+		if payload.Config.ProviderBuild.StreamIdleTimeout <= 0 {
+			payload.Config.ProviderBuild.StreamIdleTimeout = settingsdomain.DefaultBuildStreamIdleTimeout
+			changed = true
+		}
+		if payload.Config.ProviderWeb.StreamIdleTimeout <= 0 {
+			payload.Config.ProviderWeb.StreamIdleTimeout = settingsdomain.DefaultWebStreamIdleTimeout
+			changed = true
+		}
+		// ProviderConsole was introduced after runtime settings persistence. Keep
+		// a completely absent legacy section absent so applyDomainConfig can retain
+		// the current defaults instead of treating a timeout-only section as an
+		// explicitly configured (but invalid) Console provider.
+		if payload.Config.ProviderConsole != (settingsdomain.ProviderConsoleConfig{}) && payload.Config.ProviderConsole.StreamIdleTimeout <= 0 {
+			payload.Config.ProviderConsole.StreamIdleTimeout = settingsdomain.DefaultConsoleStreamIdleTimeout
+			changed = true
+		}
+		if !changed {
+			return nil
+		}
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("encode runtime settings: %w", err)
+		}
+		result := db.Model(&runtimeSettingsModel{}).
+			Where("key = ? AND revision = ?", row.Key, row.Revision).
+			UpdateColumn("value_json", string(encoded))
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 1 {
+			return nil
+		}
+	}
+	return errors.New("runtime settings changed repeatedly during migration")
+}
+
 func (d *Database) dropRedundantResponseExpiryIndexes(ctx context.Context) error {
 	for _, name := range []string{"idx_response_ownership_expires", "idx_web_response_states_expires"} {
 		if err := d.db.WithContext(ctx).Exec("DROP INDEX IF EXISTS " + name).Error; err != nil {
@@ -264,6 +335,17 @@ func (d *Database) dropRedundantResponseExpiryIndexes(ctx context.Context) error
 func (d *Database) dropProviderUpstreamUniqueIndex(ctx context.Context) error {
 	if err := d.db.WithContext(ctx).Exec("DROP INDEX IF EXISTS uidx_provider_upstream").Error; err != nil {
 		return fmt.Errorf("drop index uidx_provider_upstream: %w", err)
+	}
+	return nil
+}
+
+// dropModelPublicIDUniqueIndex upgrades both historical one-route-per-name
+// indexes. The capability-aware managed index is recreated by schemaIndexes.
+func (d *Database) dropModelPublicIDUniqueIndex(ctx context.Context) error {
+	for _, name := range []string{"idx_model_routes_public_id", "uidx_model_routes_managed_public_id"} {
+		if err := d.db.WithContext(ctx).Exec("DROP INDEX IF EXISTS " + name).Error; err != nil {
+			return fmt.Errorf("drop index %s: %w", name, err)
+		}
 	}
 	return nil
 }
@@ -293,6 +375,16 @@ func (d *Database) ensureConsoleConstraints(ctx context.Context) error {
 	}, "grok_console")
 }
 
+// ensureEgressAssetScopeConstraints upgrades existing SQLite/PostgreSQL CHECK
+// definitions so Console CDN traffic can use an independently managed scope.
+func (d *Database) ensureEgressAssetScopeConstraints(ctx context.Context) error {
+	return d.ensureNamedConstraints(ctx, []consoleConstraint{
+		{model: &egressNodeModel{}, table: "egress_nodes", name: "chk_egress_nodes_specific_scope"},
+		{model: &egressSubscriptionSourceModel{}, table: "egress_subscription_sources", name: "chk_egress_subscription_sources_scope"},
+		{model: &requestAuditModel{}, table: "request_audits", name: "chk_request_audits_egress_scope"},
+	}, "grok_console_asset")
+}
+
 // ensureAuditOperationConstraints upgrades existing databases so Codex remote
 // compaction can be recorded separately from ordinary Responses requests.
 func (d *Database) ensureAuditOperationConstraints(ctx context.Context) error {
@@ -301,13 +393,17 @@ func (d *Database) ensureAuditOperationConstraints(ctx context.Context) error {
 	}, "compaction")
 }
 
-// ensureMediaJobConstraints 将历史仅允许 grok_web 的 media job CHECK 升级到支持 Build 视频。
+// ensureMediaJobConstraints 将历史仅允许 grok_web 的 media job CHECK 升级到支持 Build 与 Console 视频。
 // AutoMigrate 不会可靠替换已有 PostgreSQL CHECK，因此启动时幂等检测并重建。
 func (d *Database) ensureMediaJobConstraints(ctx context.Context) error {
-	return d.ensureNamedConstraints(ctx, []consoleConstraint{
+	if err := d.ensureNamedConstraints(ctx, []consoleConstraint{
 		{model: &mediaJobModel{}, table: "media_jobs", name: "chk_media_jobs_provider"},
+	}, "grok_console"); err != nil {
+		return err
+	}
+	return d.ensureNamedConstraints(ctx, []consoleConstraint{
 		{model: &mediaJobModel{}, table: "media_jobs", name: "chk_media_jobs_egress_scope"},
-	}, "grok_build")
+	}, "grok_console")
 }
 
 // ensureMediaJobInputConstraint 允许异步视频任务持久化 Base64 首图。

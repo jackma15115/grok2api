@@ -125,6 +125,9 @@ func (e *CredentialRefreshError) Unwrap() error {
 // ResponseResourceRequest describes a common upstream request to a Responses resource endpoint.
 type ResponseResourceRequest struct {
 	Credential account.Credential
+	// ForcedEgressNodeID is set only by administrator quality probes. It lets a
+	// healthy credential test a quarantined node without changing its binding.
+	ForcedEgressNodeID uint64
 	// Billing is used only to determine XAI eligibility in Build auto mode; nil means the account tier is unknown.
 	Billing        *account.Billing
 	Method         string
@@ -346,7 +349,13 @@ type CredentialCodecAdapter interface {
 // CredentialMetadata contains non-sensitive display data safely derived from a stored credential.
 // Raw tokens and complete JWT claims must never be exposed through this structure.
 type CredentialMetadata struct {
+	// BuildBotFlagInspected is true only when the Build token was successfully
+	// decrypted and decoded. False means the risk source is unknown, not clean.
+	BuildBotFlagInspected bool
+	// BuildBotFlagged is true when BuildBotFlagSource is 1 or 2.
 	BuildBotFlagged bool
+	// BuildBotFlagSource is the numeric bot_flag_source/bfs claim (1 or 2), or 0 when unset.
+	BuildBotFlagSource int
 }
 
 type CredentialMetadataAdapter interface {

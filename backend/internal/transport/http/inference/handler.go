@@ -22,6 +22,7 @@ import (
 	clientkeydomain "github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	mediadomain "github.com/chenyme/grok2api/backend/internal/domain/media"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
+	"github.com/chenyme/grok2api/backend/internal/pkg/neterror"
 	"github.com/chenyme/grok2api/backend/internal/transport/http/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -250,7 +251,7 @@ func appendReasoningModelAliases(items []modelListItem) []modelListItem {
 		result = append(result, item)
 	}
 	for _, item := range items {
-		for _, aliasID := range modeldomain.ReasoningAliasPublicIDs(item.ID) {
+		for _, aliasID := range modeldomain.ReasoningAliasPublicIDsForProvider(item.Provider, item.ID) {
 			if seen[aliasID] {
 				continue
 			}
@@ -364,7 +365,7 @@ func (h *Handler) generateImage(c *gin.Context) {
 		return
 	}
 	if value := bytes.TrimSpace(request.StorageOptions); len(value) > 0 && !bytes.Equal(value, []byte("null")) {
-		writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "当前 Grok Web Provider 不支持 storage_options")
+		writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "当前兼容层暂不支持 storage_options")
 		return
 	}
 	count := 1
@@ -507,7 +508,7 @@ func (h *Handler) editImage(c *gin.Context) {
 		return
 	}
 	if value := bytes.TrimSpace(request.StorageOptions); len(value) > 0 && !bytes.Equal(value, []byte("null")) {
-		writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "当前 Grok Web Provider 不支持 storage_options")
+		writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "当前兼容层暂不支持 storage_options")
 		return
 	}
 	model := strings.TrimSpace(request.Model)
@@ -542,8 +543,8 @@ func (h *Handler) editImage(c *gin.Context) {
 		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "图片编辑缺少有效 model 或 prompt")
 		return
 	}
-	if count != 1 {
-		writeOpenAIError(c, http.StatusBadRequest, "invalid_parameter", "Grok Web 图片编辑当前仅支持 n=1")
+	if count < 1 || count > 10 {
+		writeOpenAIError(c, http.StatusBadRequest, "invalid_parameter", "n 必须在 1 到 10 之间")
 		return
 	}
 	partialImages := 0
@@ -572,8 +573,8 @@ func (h *Handler) editImage(c *gin.Context) {
 	if resolution == "" {
 		resolution = "1k"
 	}
-	if resolution != "1k" {
-		writeOpenAIError(c, http.StatusBadRequest, "invalid_parameter", "Grok Web 图片编辑当前仅支持 resolution=1k")
+	if resolution != "1k" && resolution != "2k" {
+		writeOpenAIError(c, http.StatusBadRequest, "invalid_parameter", "resolution 必须是 1k 或 2k")
 		return
 	}
 	clientKey, requestID, ok := requestIdentity(c)
@@ -617,11 +618,11 @@ func (h *Handler) generateVideo(c *gin.Context) {
 		return
 	}
 	if hasJSONValue(request.Output) {
-		writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "当前 Grok Web Provider 不支持 output.upload_url")
+		writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "当前兼容层暂不支持 output.upload_url")
 		return
 	}
 	if hasJSONValue(request.StorageOptions) {
-		writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "当前 Grok Web Provider 不支持 storage_options")
+		writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "当前兼容层暂不支持 storage_options")
 		return
 	}
 	duration, err := parseVideoDuration(request.Duration)
@@ -661,16 +662,21 @@ func (h *Handler) generateVideo(c *gin.Context) {
 	}
 	referenceURLs := make([]string, 0, len(inputs))
 	for _, input := range inputs {
-		if strings.TrimSpace(input.FileID) != "" {
-			writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "当前暂不支持 image.file_id，请使用 image.url")
-			return
-		}
 		urlValue := strings.TrimSpace(input.URL)
-		if urlValue == "" {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "每个 image 都必须提供有效 url")
+		fileID := strings.TrimSpace(input.FileID)
+		if (urlValue == "") == (fileID == "") {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "每个 image 必须且只能提供 url 或 file_id")
 			return
 		}
-		referenceURLs = append(referenceURLs, urlValue)
+		if fileID != "" {
+			if !mediadomain.IsInputAssetID(fileID) {
+				writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "image.file_id 无效")
+				return
+			}
+			referenceURLs = append(referenceURLs, gateway.VideoInputFileReference(fileID))
+		} else {
+			referenceURLs = append(referenceURLs, urlValue)
+		}
 	}
 	if prompt == "" && len(referenceURLs) == 0 {
 		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "文本生视频必须提供 prompt；图片生视频可以省略 prompt")
@@ -1018,6 +1024,8 @@ func (h *Handler) writeProtocolResult(c *gin.Context, result *gateway.Result, st
 			errorCode = "upstream_stream_error"
 		case errors.Is(err, errUpstreamStreamIncomplete):
 			errorCode = "upstream_stream_incomplete"
+		case errors.Is(err, neterror.ErrUpstreamStreamIdleTimeout):
+			errorCode = "upstream_stream_idle_timeout"
 		case errors.Is(err, errUpstreamStreamRead):
 			errorCode = "upstream_stream_interrupted"
 		default:
@@ -1064,7 +1072,7 @@ func copyStream(writer gin.ResponseWriter, source io.Reader, protocol streamProt
 			if inspector.terminalSuccess {
 				return inspector.Metadata(), nil
 			}
-			return inspector.Metadata(), fmt.Errorf("%w: %v", errUpstreamStreamRead, readErr)
+			return inspector.Metadata(), fmt.Errorf("%w: %w", errUpstreamStreamRead, readErr)
 		}
 	}
 }
@@ -1504,6 +1512,7 @@ type responseInputDetailsDTO struct {
 
 type responseOutputDetailsDTO struct {
 	ReasoningTokens int64 `json:"reasoning_tokens"`
+	ThinkingTokens  int64 `json:"thinking_tokens"`
 }
 
 type responseContextDetailsDTO struct {
@@ -1544,6 +1553,9 @@ func (value responseUsageDTO) toGatewayUsage(responseModel string) gateway.Usage
 	reasoning := value.OutputTokensDetails.ReasoningTokens
 	if reasoning == 0 {
 		reasoning = value.CompletionTokensDetails.ReasoningTokens
+	}
+	if reasoning == 0 {
+		reasoning = value.OutputTokensDetails.ThinkingTokens
 	}
 	return gateway.Usage{
 		InputTokens: input, CachedInputTokens: cached,
@@ -1672,7 +1684,7 @@ func writeGatewayError(c *gin.Context, err error) {
 	case errors.Is(err, gateway.ErrResponseStateUnsupported), errors.Is(err, gateway.ErrConversationUnsupported):
 		status, code = http.StatusBadRequest, "unsupported_parameter"
 		message = err.Error()
-	case errors.Is(err, gateway.ErrVideoInputTooLarge):
+	case errors.Is(err, gateway.ErrVideoInputTooLarge), errors.Is(err, gateway.ErrVideoInputUnavailable):
 		status, code = http.StatusBadRequest, "invalid_request"
 		message = err.Error()
 	case errors.As(err, &upstreamFailure):

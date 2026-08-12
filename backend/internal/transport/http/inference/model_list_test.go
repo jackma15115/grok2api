@@ -19,8 +19,10 @@ func TestNewModelListItemsDeduplicatesSharedPublicName(t *testing.T) {
 		{PublicID: "Build/grok-shared", Provider: account.ProviderBuild, CreatedAt: now},
 		{PublicID: "Console/grok-shared", Provider: account.ProviderConsole, CreatedAt: now.Add(time.Second)},
 		{PublicID: "Web/grok-chat-fast", Provider: account.ProviderWeb, CreatedAt: now},
+		{PublicID: "Console/grok-imagine-image", Provider: account.ProviderConsole, Capability: modeldomain.CapabilityImage, CreatedAt: now},
+		{PublicID: "Console/grok-imagine-image", Provider: account.ProviderConsole, Capability: modeldomain.CapabilityImageEdit, CreatedAt: now.Add(time.Second)},
 	})
-	if len(items) != 2 || items[0].ID != "grok-shared" || items[1].ID != "grok-chat-fast" {
+	if len(items) != 3 || items[0].ID != "grok-shared" || items[1].ID != "grok-chat-fast" || items[2].ID != "grok-imagine-image" {
 		t.Fatalf("model list = %#v", items)
 	}
 }
@@ -43,6 +45,7 @@ func TestAppendReasoningModelAliasesUsesRealSupportedLevels(t *testing.T) {
 	base := newModelListItems([]modeldomain.Route{
 		{PublicID: "Build/grok-4.5", Provider: account.ProviderBuild, Capability: modeldomain.CapabilityResponses, CreatedAt: now},
 		{PublicID: "Console/grok-4.3", Provider: account.ProviderConsole, Capability: modeldomain.CapabilityResponses, CreatedAt: now},
+		{PublicID: "Console/grok-4.20-0309-reasoning", Provider: account.ProviderConsole, Capability: modeldomain.CapabilityResponses, CreatedAt: now},
 		{PublicID: "Build/grok-build-0.1", Provider: account.ProviderBuild, Capability: modeldomain.CapabilityResponses, CreatedAt: now},
 	})
 	expanded := appendReasoningModelAliases(base)
@@ -55,7 +58,10 @@ func TestAppendReasoningModelAliasesUsesRealSupportedLevels(t *testing.T) {
 			t.Fatalf("missing model %q in %#v", want, expanded)
 		}
 	}
-	for _, reject := range []string{"grok-4.5-none", "grok-4.5-xhigh", "grok-4.5-max", "grok-4.3-xhigh", "grok-build-0.1-none"} {
+	for _, reject := range []string{
+		"grok-4.5-none", "grok-4.5-xhigh", "grok-4.5-max", "grok-4.3-xhigh", "grok-build-0.1-none",
+		"grok-4.20-0309-reasoning-low", "grok-4.20-0309-reasoning-medium", "grok-4.20-0309-reasoning-high",
+	} {
 		if ids[reject] {
 			t.Fatalf("unexpected unsupported alias %q", reject)
 		}
@@ -103,6 +109,18 @@ func TestNewCodexModelCatalogIncludesRequiredProtocolFields(t *testing.T) {
 	}
 }
 
+func TestCodexCatalogMarksConsoleGrok420AsFixedReasoning(t *testing.T) {
+	entry := newCodexModelCatalog([]modelListItem{{
+		ID: "grok-4.20-0309-reasoning", Provider: account.ProviderConsole, Capability: modeldomain.CapabilityResponses,
+	}}).Models[0]
+	if entry.DefaultReasoningLevel != "none" || len(entry.SupportedReasoningLevels) != 0 {
+		t.Fatalf("fixed reasoning efforts = default %q, levels %#v", entry.DefaultReasoningLevel, entry.SupportedReasoningLevels)
+	}
+	if !entry.SupportsReasoningSummaryParameter || !entry.SupportsReasoningSummaries {
+		t.Fatalf("fixed reasoning model lost summary support: %#v", entry)
+	}
+}
+
 func TestNewCodexModelCacheRespectsNonReasoningModel(t *testing.T) {
 	now := time.Unix(100, 0).UTC()
 	items := newModelListItems([]modeldomain.Route{
@@ -124,7 +142,7 @@ func TestCodexCatalogHidesMediaModels(t *testing.T) {
 	now := time.Unix(100, 0).UTC()
 	routes := []modeldomain.Route{
 		{PublicID: "Build/grok-4.5", Provider: account.ProviderBuild, Capability: modeldomain.CapabilityResponses, CreatedAt: now},
-		{PublicID: "Web/grok-imagine-image", Provider: account.ProviderWeb, Capability: modeldomain.CapabilityImage, CreatedAt: now},
+		{PublicID: "Web/grok-imagine-image-lite", Provider: account.ProviderWeb, Capability: modeldomain.CapabilityImage, CreatedAt: now},
 		{PublicID: "Web/grok-imagine-video", Provider: account.ProviderWeb, Capability: modeldomain.CapabilityVideo, CreatedAt: now},
 	}
 	catalog := newCodexModelCatalog(newModelListItems(routes))
@@ -137,7 +155,7 @@ func TestCodexCatalogHidesMediaModels(t *testing.T) {
 			if entry.Visibility != "list" {
 				t.Fatalf("visibility for %s = %q, want list", entry.Slug, entry.Visibility)
 			}
-		case "grok-imagine-image", "grok-imagine-video":
+		case "grok-imagine-image-lite", "grok-imagine-video":
 			if entry.Visibility != "hide" {
 				t.Fatalf("visibility for %s = %q, want hide", entry.Slug, entry.Visibility)
 			}

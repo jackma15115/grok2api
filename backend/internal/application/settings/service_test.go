@@ -117,6 +117,43 @@ func TestUpdateRejectsBuildResponseHeaderTimeoutOutsideSafeRange(t *testing.T) {
 	}
 }
 
+func TestUpdateRejectsStreamIdleTimeoutBeyondChatTimeout(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*EditableConfig)
+	}{
+		{
+			name: "web",
+			mutate: func(input *EditableConfig) {
+				input.ProviderWeb.ChatTimeout = "1m"
+				input.ProviderWeb.StreamIdleTimeout = "2m"
+			},
+		},
+		{
+			name: "console",
+			mutate: func(input *EditableConfig) {
+				input.ProviderConsole.ChatTimeout = "1m"
+				input.ProviderConsole.StreamIdleTimeout = "2m"
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := testConfig(t)
+			repository := &runtimeSettingsRepositoryStub{}
+			service := NewService(cfg, time.Time{}, 0, repository, nil, nil)
+			input := service.Get().Config
+			test.mutate(&input)
+			if _, err := service.Update(context.Background(), 0, input); !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("error = %v, want ErrInvalidInput", err)
+			}
+			if repository.found {
+				t.Fatal("shadowed stream idle timeout was persisted")
+			}
+		})
+	}
+}
+
 func TestUpdateValidatesMaxAttemptsRange(t *testing.T) {
 	cfg := testConfig(t)
 	repository := &runtimeSettingsRepositoryStub{}
@@ -168,6 +205,68 @@ func TestUpdatePreservesBuildChatDeniedPolicyWhenFieldIsOmitted(t *testing.T) {
 	}
 	if !applied.Routing.MarkBuildChatDeniedAsReauth || !repository.value.Routing.MarkBuildChatDeniedAsReauth {
 		t.Fatalf("omitted Build chat denied policy was overwritten: applied=%t persisted=%t", applied.Routing.MarkBuildChatDeniedAsReauth, repository.value.Routing.MarkBuildChatDeniedAsReauth)
+	}
+}
+
+func TestUpdatePreservesAccountIsolationWhenFieldIsOmitted(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Routing.AccountIsolatedConnections = true
+	repository := &runtimeSettingsRepositoryStub{}
+	var applied config.Config
+	service := NewService(cfg, time.Time{}, 0, repository, nil, func(next config.Config) { applied = next })
+	input := service.Get().Config
+	input.Routing.AccountIsolatedConnections = false
+	input.Routing.AccountIsolatedConnectionsProvided = false
+
+	snapshot, err := service.Update(context.Background(), 0, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !applied.Routing.AccountIsolatedConnections || repository.value.Routing.AccountIsolatedConnections == nil || !*repository.value.Routing.AccountIsolatedConnections {
+		t.Fatal("omitted account isolation setting was overwritten")
+	}
+
+	input = snapshot.Config
+	input.Routing.AccountIsolatedConnections = false
+	input.Routing.AccountIsolatedConnectionsProvided = true
+	if _, err := service.Update(context.Background(), snapshot.Revision, input); err != nil {
+		t.Fatal(err)
+	}
+	if applied.Routing.AccountIsolatedConnections || repository.value.Routing.AccountIsolatedConnections == nil || *repository.value.Routing.AccountIsolatedConnections {
+		t.Fatal("explicit account isolation update was ignored")
+	}
+}
+
+func TestLoadPersistedKeepsAccountIsolationDefaultForOlderPayload(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Routing.AccountIsolatedConnections = true
+	value := toDomainConfig(cfg)
+	value.Routing.AccountIsolatedConnections = nil
+	repository := &runtimeSettingsRepositoryStub{value: value, found: true}
+
+	loaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.Routing.AccountIsolatedConnections {
+		t.Fatal("older persisted payload disabled config.yaml account isolation")
+	}
+}
+
+func TestLoadPersistedPreservesExplicitlyDisabledAccountIsolation(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Routing.AccountIsolatedConnections = true
+	value := toDomainConfig(cfg)
+	disabled := false
+	value.Routing.AccountIsolatedConnections = &disabled
+	repository := &runtimeSettingsRepositoryStub{value: value, found: true}
+
+	loaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Routing.AccountIsolatedConnections {
+		t.Fatal("explicitly disabled persisted account isolation was ignored")
 	}
 }
 
@@ -227,6 +326,24 @@ func TestLoadPersistedKeepsConsoleDefaultsWhenFieldIsMissing(t *testing.T) {
 	}
 	if loaded.Provider.Console != cfg.Provider.Console {
 		t.Fatalf("console config = %#v, want %#v", loaded.Provider.Console, cfg.Provider.Console)
+	}
+}
+
+func TestLoadPersistedBackfillsProviderStreamIdleTimeoutDefaults(t *testing.T) {
+	cfg := testConfig(t)
+	value := toDomainConfig(cfg)
+	value.ProviderWeb.StreamIdleTimeout = 0
+	value.ProviderConsole.StreamIdleTimeout = 0
+	repository := &runtimeSettingsRepositoryStub{value: value, found: true}
+	loaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Provider.Web.StreamIdleTimeout.Value(); got != settingsdomain.DefaultWebStreamIdleTimeout {
+		t.Fatalf("Web stream idle timeout = %s", got)
+	}
+	if got := loaded.Provider.Console.StreamIdleTimeout.Value(); got != settingsdomain.DefaultConsoleStreamIdleTimeout {
+		t.Fatalf("Console stream idle timeout = %s", got)
 	}
 }
 
