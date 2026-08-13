@@ -11,6 +11,7 @@ services:
       - "${GROK2API_PORT:-8000}:8000"
     environment:
       TZ: "${TZ:-Asia/Shanghai}"
+      GROK2API_MEMORY_SOFT_LIMIT: "${GROK2API_MEMORY_SOFT_LIMIT:-}"
     volumes:
       - "${GROK2API_CONFIG:-./config.yaml}:/run/grok2api/config.yaml:ro"
       - grok2api-data:/app/data

@@ -12,6 +12,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/app"
 	"github.com/chenyme/grok2api/backend/internal/infra/config"
 	"github.com/chenyme/grok2api/backend/internal/infra/observability"
+	"github.com/chenyme/grok2api/backend/internal/infra/resourcelimit"
 )
 
 // Run 解析启动参数并运行后端服务。
@@ -31,6 +32,18 @@ func Run(args []string) error {
 		}
 	}
 	logger := observability.NewLogger()
+	memoryLimit, err := resourcelimit.ConfigureMemoryLimit()
+	if err != nil {
+		return err
+	}
+	if memoryLimit.Source != "" {
+		logger.Info("memory_limit_configured",
+			"source", memoryLimit.Source,
+			"container_limit_bytes", memoryLimit.ContainerBytes,
+			"go_memory_limit_bytes", memoryLimit.GoBytes,
+			"auto_applied", memoryLimit.Applied,
+		)
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	application, err := app.New(ctx, cfg, logger)
