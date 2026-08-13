@@ -3,6 +3,7 @@ package relational
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -38,6 +39,42 @@ func (d *Database) Dialect() string {
 		return ""
 	}
 	return d.dialect
+}
+
+// MaintainSQLite reclaims unused pages when needed and checkpoints WAL data
+// into the main database file. It is a no-op for other database dialects.
+func (d *Database) MaintainSQLite(ctx context.Context) error {
+	if d == nil || d.dialect != "sqlite" {
+		return nil
+	}
+	sqlDB, err := d.db.DB()
+	if err != nil {
+		return err
+	}
+
+	var freePages int64
+	if err := sqlDB.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&freePages); err != nil {
+		return fmt.Errorf("inspect SQLite free pages: %w", err)
+	}
+
+	var compactErr error
+	if freePages > 0 {
+		if _, err := sqlDB.ExecContext(ctx, "VACUUM"); err != nil {
+			compactErr = fmt.Errorf("compact SQLite: %w", err)
+		}
+	}
+	return errors.Join(compactErr, checkpointSQLiteWAL(ctx, sqlDB))
+}
+
+func checkpointSQLiteWAL(ctx context.Context, sqlDB *sql.DB) error {
+	var busy, logFrames, checkpointedFrames int64
+	if err := sqlDB.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logFrames, &checkpointedFrames); err != nil {
+		return fmt.Errorf("checkpoint SQLite WAL: %w", err)
+	}
+	if busy != 0 {
+		return fmt.Errorf("checkpoint SQLite WAL: database busy after checkpointing %d of %d frames", checkpointedFrames, logFrames)
+	}
+	return nil
 }
 
 // OpenSQLite 打开纯 Go SQLite 数据库并启用 WAL、外键与 busy timeout。

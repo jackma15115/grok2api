@@ -56,6 +56,7 @@ const (
 	responseCleanupInterval           = 5 * time.Minute
 	responseCleanupBudget             = 30 * time.Second
 	responseCleanupLockTTL            = 2 * time.Minute
+	sqliteMaintenanceInterval         = 15 * time.Minute
 )
 
 // Application 管理后端进程生命周期和本地后台任务。
@@ -546,6 +547,12 @@ func (a *Application) Run(ctx context.Context) error {
 		})
 		return nil
 	})
+	if a.database.Dialect() == "sqlite" {
+		startBackground("sqlite_maintenance", func(taskCtx context.Context) error {
+			a.runPeriodicTask(taskCtx, sqliteMaintenanceInterval, "sqlite_maintenance", a.database.MaintainSQLite)
+			return nil
+		})
+	}
 	startBackground("release_check", func(taskCtx context.Context) error {
 		a.updates.Check(taskCtx)
 		a.runPeriodicTask(taskCtx, 24*time.Hour, "release_check", func(checkCtx context.Context) error {
