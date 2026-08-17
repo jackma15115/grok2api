@@ -60,6 +60,9 @@ func TestUpdatePersistsAppliesAndReportsRestart(t *testing.T) {
 	input.ProviderConsole.ChatTimeout = "6m"
 	input.ProviderConsole.ToolCall = true
 	input.ProviderConsole.NativeTools = false
+	input.ProviderWeb.ClearanceProvided = true
+	input.ProviderWeb.ClearanceMode = config.ClearanceModeOnDemand
+	input.ProviderWeb.FlareSolverrURL = "http://flaresolverr:8191"
 	input.Batch = BatchConfig{ImportConcurrency: 26, ConversionConcurrency: 27, SyncConcurrency: 28, RefreshConcurrency: 29, RandomDelay: "750ms"}
 
 	snapshot, err := service.Update(context.Background(), service.Get().Revision, input)
@@ -87,6 +90,9 @@ func TestUpdatePersistsAppliesAndReportsRestart(t *testing.T) {
 	if applied.Provider.Console.BaseURL != "https://console.example.com" || applied.Provider.Console.ChatTimeout.Value() != 6*time.Minute || !applied.Provider.Console.ToolCall || applied.Provider.Console.NativeTools {
 		t.Fatalf("console configuration was not applied: %#v", applied.Provider.Console)
 	}
+	if applied.Provider.Web.ClearanceMode != config.ClearanceModeOnDemand || applied.Provider.Web.FlareSolverrURL != "http://flaresolverr:8191" {
+		t.Fatalf("on-demand Clearance configuration was not applied: %#v", applied.Provider.Web)
+	}
 	if len(snapshot.RestartRequired) != 1 || snapshot.RestartRequired[0] != "audit.bufferSize" {
 		t.Fatalf("restartRequired = %#v", snapshot.RestartRequired)
 	}
@@ -94,7 +100,7 @@ func TestUpdatePersistsAppliesAndReportsRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.Server.MaxConcurrentRequests != 2048 || reloaded.Provider.Build.ResponseHeaderTimeout.Value() != 7*time.Minute || reloaded.Routing.MaxAttempts != 5 || !reloaded.Routing.PreferFreeBuild || !reloaded.Routing.SegmentedSelectorEnabled || reloaded.Routing.SegmentedMinCandidates != 5000 || reloaded.Routing.SegmentedWindowSize != 96 || reloaded.Audit.BufferSize != input.Audit.BufferSize || reloaded.Media.MaxTotalBytes != 2<<30 || reloaded.Media.CleanupThresholdPercent != 75 || reloaded.Batch.SyncConcurrency != 28 || reloaded.Batch.RandomDelay.Value() != 750*time.Millisecond || reloaded.Provider.Console.BaseURL != "https://console.example.com" || !reloaded.Provider.Console.ToolCall || reloaded.Provider.Console.NativeTools {
+	if reloaded.Server.MaxConcurrentRequests != 2048 || reloaded.Provider.Build.ResponseHeaderTimeout.Value() != 7*time.Minute || reloaded.Routing.MaxAttempts != 5 || !reloaded.Routing.PreferFreeBuild || !reloaded.Routing.SegmentedSelectorEnabled || reloaded.Routing.SegmentedMinCandidates != 5000 || reloaded.Routing.SegmentedWindowSize != 96 || reloaded.Audit.BufferSize != input.Audit.BufferSize || reloaded.Media.MaxTotalBytes != 2<<30 || reloaded.Media.CleanupThresholdPercent != 75 || reloaded.Batch.SyncConcurrency != 28 || reloaded.Batch.RandomDelay.Value() != 750*time.Millisecond || reloaded.Provider.Console.BaseURL != "https://console.example.com" || !reloaded.Provider.Console.ToolCall || reloaded.Provider.Console.NativeTools || reloaded.Provider.Web.ClearanceMode != config.ClearanceModeOnDemand {
 		t.Fatalf("configuration was not persisted")
 	}
 }

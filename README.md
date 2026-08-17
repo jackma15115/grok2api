@@ -447,7 +447,14 @@ docker compose -f docker-compose.warp-flaresolverr.yml up -d
 podman compose -f docker-compose.warp-flaresolverr.yml up -d
 ```
 
-Then select `FlareSolverr` under **Runtime Settings → Media & Network → Clearance** and use `http://flaresolverr:8191`. FlareSolverr is not published on the host; each Web or Console egress node uses its own proxy to obtain cookies and User-Agent.
+Then use `http://flaresolverr:8191` under **Runtime Settings → Media & Network → Clearance** and select one of the managed modes:
+
+- `FlareSolverr` proactively refreshes stale fixed-egress Clearance on the configured schedule.
+- `On demand` keeps the last successful Clearance regardless of age and solves again only after an upstream rejection explicitly invalidates it. Scheduled refresh does not launch a browser in this mode.
+
+`Manual` never invokes FlareSolverr. The on-demand mode can make the first request without a managed Clearance; if Cloudflare rejects it, the next lease performs one deduplicated solve.
+
+FlareSolverr is not published on the host; each Web or Console egress node uses its own proxy to obtain cookies and User-Agent.
 
 The egress layer retries only connection failures known to occur before request submission. It does not replay submitted generation requests, authentication failures, exhausted quotas, or upstream rate limits.
 
@@ -476,7 +483,7 @@ Important optional settings:
 
 - `audit.ledgerMode`: `observe` reports ledger faults; `enforce` can pause new inference to protect billing integrity.
 - `routing.accountIsolatedConnections`: partitions outbound TCP/HTTP pools by account for external L4 or connection-hash load balancers. It is off by default because it increases connections, TLS handshakes, memory, and file-descriptor usage.
-- `routing.segmentedSelectorEnabled`: optimizes large account pools while retaining full-planner fallback and atomic guards.
+- `routing.segmentedSelectorEnabled`: enabled by default for pools with at least 3,000 eligible accounts; bounds dynamic concurrency reads while retaining quota/tier priorities, sticky sessions, full-planner fallback, and atomic guards.
 - Build response-header timeout and exact-match 403 invalidation rules are hot-reloadable.
 - **Sync latest version** applies the validated Grok Build client version and User-Agent.
 

@@ -341,12 +341,13 @@ func TestNormalizeRequestForwardsXSearchTimeRangeAndImageSearch(t *testing.T) {
 	if !ok {
 		t.Fatal("grok-4.3 missing")
 	}
+	cfg := Config{ToolCall: true}
 
 	t.Run("forwards enable_image_search on web_search", func(t *testing.T) {
 		body, err := normalizeRequest([]byte(`{
 			"model":"grok-4.3",
 			"tools":[{"type":"web_search","enable_image_search":true,"custom":true}]
-		}`), spec)
+		}`), spec, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -374,7 +375,7 @@ func TestNormalizeRequestForwardsXSearchTimeRangeAndImageSearch(t *testing.T) {
 		body, err := normalizeRequest([]byte(`{
 			"model":"grok-4.3",
 			"tools":[{"type":"web_search"}]
-		}`), spec)
+		}`), spec, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -392,7 +393,7 @@ func TestNormalizeRequestForwardsXSearchTimeRangeAndImageSearch(t *testing.T) {
 		body, err := normalizeRequest([]byte(`{
 			"model":"grok-4.3",
 			"tools":[{"type":"x_search","from_date":"2026-07-01","to_date":"2026-07-23","noise":1}]
-		}`), spec)
+		}`), spec, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -416,7 +417,7 @@ func TestNormalizeRequestForwardsXSearchTimeRangeAndImageSearch(t *testing.T) {
 		body, err := normalizeRequest([]byte(`{
 			"model":"grok-4.3",
 			"tools":[{"type":"x_search","from_date":"2026-7-01","to_date":"2026-02-30"}]
-		}`), spec)
+		}`), spec, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -437,7 +438,7 @@ func TestNormalizeRequestForwardsXSearchTimeRangeAndImageSearch(t *testing.T) {
 		body, err := normalizeRequest([]byte(`{
 			"model":"grok-4.3",
 			"tools":[{"type":"x_search","from_date":"2026-07-24","to_date":"2026-07-23"}]
-		}`), spec)
+		}`), spec, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -455,7 +456,7 @@ func TestNormalizeRequestForwardsXSearchTimeRangeAndImageSearch(t *testing.T) {
 		body, err := normalizeRequest([]byte(`{
 			"model":"grok-4.3",
 			"tools":[{"type":"x_search","from_date":"2026-08-01"}]
-		}`), spec)
+		}`), spec, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1639,6 +1640,41 @@ func TestConsoleVideoCreatesAndPollsStandardResources(t *testing.T) {
 	}
 }
 
+func TestConsoleVideoCreateFailureStagesPreserveRetrySafety(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    int
+		body      string
+		wantStage provider.VideoStage
+	}{
+		{name: "malformed successful response", status: http.StatusOK, body: `{"status":"queued"}`, wantStage: provider.VideoStageSubmitted},
+		{name: "explicit rate limit rejection", status: http.StatusTooManyRequests, body: `{"error":"rate limited"}`, wantStage: provider.VideoStageCreate},
+		{name: "server failure result unknown", status: http.StatusInternalServerError, body: `{"error":"failed"}`, wantStage: provider.VideoStageSubmitted},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if serveTestDPoPToken(t, writer, request) {
+					return
+				}
+				verifyTestDPoPProof(t, request)
+				writer.Header().Set("Content-Type", "application/json")
+				writer.WriteHeader(test.status)
+				_, _ = io.WriteString(writer, test.body)
+			}))
+			t.Cleanup(server.Close)
+			adapter, credential := newConsoleTestAdapter(t, server.URL)
+			_, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+				Credential: credential, Model: "grok-imagine-video", Prompt: "test", Duration: 5, Resolution: "720p",
+			})
+			stage, ok := provider.VideoErrorStage(err)
+			if !ok || stage != test.wantStage {
+				t.Fatalf("stage = %q, ok=%t, err=%v; want %q", stage, ok, err, test.wantStage)
+			}
+		})
+	}
+}
+
 func TestConsoleVideoPostsReferenceImages(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if serveTestDPoPToken(t, writer, request) {
@@ -1805,7 +1841,7 @@ func TestConsoleVideoPostsReferenceAudios(t *testing.T) {
 // 8. Maximum allowed is 7." on both grok-imagine-video and grok-imagine-video-1.5.
 func TestConsoleVideoRejectsTooManyReferenceImages(t *testing.T) {
 	adapter, credential := newConsoleTestAdapter(t, "https://console.example")
-	references := make([]string, consoleMaxVideoReferenceImages+1)
+	references := make([]string, provider.ConsoleVideoMaxReferenceImages+1)
 	for i := range references {
 		references[i] = "https://example.com/" + strings.Repeat("x", i+1) + ".png"
 	}
@@ -1819,7 +1855,7 @@ func TestConsoleVideoRejectsTooManyReferenceImages(t *testing.T) {
 
 func TestConsoleVideoRejectsTooManyCombinedImages(t *testing.T) {
 	adapter, credential := newConsoleTestAdapter(t, "https://console.example")
-	references := make([]string, consoleMaxVideoReferenceImages)
+	references := make([]string, provider.ConsoleVideoMaxReferenceImages)
 	for i := range references {
 		references[i] = "https://example.com/" + strings.Repeat("y", i+1) + ".png"
 	}

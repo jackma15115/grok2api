@@ -441,7 +441,14 @@ docker compose -f docker-compose.warp-flaresolverr.yml up -d
 podman compose -f docker-compose.warp-flaresolverr.yml up -d
 ```
 
-随后在 **运行设置 → 媒体与网络 → Clearance** 选择 `FlareSolverr`，地址填写 `http://flaresolverr:8191`。FlareSolverr 不会暴露到宿主机；每个 Web 或 Console 出口节点均使用自身代理获取匹配的 Cookie 与 User-Agent。
+随后在 **运行设置 → 媒体与网络 → Clearance** 填写 `http://flaresolverr:8191`，并选择一种托管模式：
+
+- `FlareSolverr` 按配置周期主动刷新固定出口中过期的 Clearance。
+- `按需刷新` 不按时间淘汰最后一次成功的 Clearance，只在上游明确拒绝并将其标记失效后重新求解；后台定时任务不会在该模式下启动浏览器。
+
+`手动维护` 始终不会调用 FlareSolverr。按需模式允许首次请求不携带托管 Clearance；若被 Cloudflare 拒绝，下一次租约会执行一次经过并发去重的求解。
+
+FlareSolverr 不会暴露到宿主机；每个 Web 或 Console 出口节点均使用自身代理获取匹配的 Cookie 与 User-Agent。
 
 出口层只重试可以确认发生在请求提交前的连接故障，不会重放已经提交的生成请求、认证失败、额度耗尽或上游限流。
 
@@ -470,7 +477,7 @@ GROK2API_DATABASE_URL='postgresql://user:password@host:5432/grok2api?sslmode=req
 
 - `audit.ledgerMode`：`observe` 仅报告账本故障；`enforce` 可暂停新推理以保护计费准确性。
 - `routing.accountIsolatedConnections`：为外部 L4 或按连接哈希的负载均衡器按账号拆分出站 TCP/HTTP 连接池。默认关闭，因为会增加连接数、TLS 握手、内存和文件描述符占用。
-- `routing.segmentedSelectorEnabled`：用于大型账号池，同时保留完整选号回退与原子门禁。
+- `routing.segmentedSelectorEnabled`：默认对至少 3000 个可用账号的大号池启用，限制动态并发读取规模，同时保留额度/等级优先级、会话粘性、完整选号回退与原子门禁。
 - Build 响应头超时和精确匹配的 403 失效规则支持热加载。
 - “同步最新版本”可应用已验证的 Grok Build 客户端版本和 User-Agent。
 
