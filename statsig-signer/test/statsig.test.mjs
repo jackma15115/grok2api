@@ -29,11 +29,14 @@ test("extracts and validates a browser-captured material pair", () => {
   assert.equal(material.seed, capturedSeed);
   assert.equal(material.hex, "ad36d100100");
   assert.equal(material.number, 99789180);
+  assert.equal(material.digestLength, 16);
+  assert.equal(material.hasMarker, true);
+  assert.equal(material.prefix, "");
   assert.equal(buildStatsig(material, "POST", "/rest/app-chat/conversations/new", 1682924400 + 99789180, 143), capturedID);
 });
 
-test("rejects malformed or non-70-byte values", () => {
-  assert.throws(() => decodeStatsigID("not-a-statsig"), /70 bytes|base64/);
+test("rejects malformed or unsupported values", () => {
+  assert.throws(() => decodeStatsigID("not-a-statsig"), /digest prefix|base64/);
   assert.throws(() => extractMaterialFromCapture({ statsigID: capturedID, method: "POST", path: "/rest/test", digestInputs: [capturedInput] }), /matching/);
 });
 
@@ -43,4 +46,36 @@ test("accepts padded config seed and emits a raw base64 value", () => {
   const value = buildStatsig(material, "post", "/rest/test", 1682924401, 1);
   assert.equal(value.includes("="), false);
   assert.equal(decodeStatsigID(value).seed.toString("base64"), seed);
+});
+
+test("preserves a version-prefixed browser payload", () => {
+  const material = materialFromConfig(Buffer.alloc(48, 0x42).toString("base64"), "deadbeef", {
+    prefix: Buffer.from([0x02, 0x01]).toString("base64"),
+    digestLength: 16,
+    hasMarker: true,
+  });
+  const value = buildStatsig(material, "POST", "/rest/chat", 1682924400 + 1234, 0x33);
+  const decoded = decodeStatsigID(value);
+  assert.equal(Buffer.from(value, "base64").length, 72);
+  assert.equal(decoded.prefix, "AgE");
+  assert.equal(decoded.digestLength, 16);
+  assert.equal(decoded.hasMarker, true);
+  assert.equal(buildStatsig(extractMaterialFromCapture({
+    statsigID: value,
+    method: "POST",
+    path: "/rest/chat",
+    digestInputs: ["POST!/rest/chat!1234obfiowerehiringdeadbeef"],
+  }), "POST", "/rest/chat", 1682924400 + 1234, 0x33), value);
+});
+
+test("supports markerless material with a longer digest", () => {
+  const material = materialFromConfig(Buffer.alloc(48, 0x24).toString("base64"), "349e9cdeadbeef", {
+    digestLength: 19,
+    hasMarker: false,
+  });
+  const value = buildStatsig(material, "GET", "/rest/modes", 1682924400 + 9876, 0x12);
+  const decoded = decodeStatsigID(value);
+  assert.equal(Buffer.from(value, "base64").length, 72);
+  assert.equal(decoded.digestLength, 19);
+  assert.equal(decoded.hasMarker, false);
 });

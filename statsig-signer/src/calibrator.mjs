@@ -59,6 +59,14 @@ function createDeferred() {
   return { promise, resolve };
 }
 
+function optionalBoolean(value, name) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  throw new Error(`${name} must be true or false`);
+}
+
 export class BrowserCalibrator {
   constructor(options = {}) {
     this.targetURL = options.targetURL ?? process.env.SIGNER_TARGET_URL ?? DEFAULT_TARGET_URL;
@@ -78,7 +86,11 @@ export class BrowserCalibrator {
     this.refreshPromise = null;
     this.fallback = null;
     if (process.env.SIGNER_FALLBACK_SEED && process.env.SIGNER_FALLBACK_HEX) {
-      this.fallback = materialFromConfig(process.env.SIGNER_FALLBACK_SEED, process.env.SIGNER_FALLBACK_HEX);
+      this.fallback = materialFromConfig(process.env.SIGNER_FALLBACK_SEED, process.env.SIGNER_FALLBACK_HEX, {
+        prefix: process.env.SIGNER_FALLBACK_PREFIX,
+        digestLength: process.env.SIGNER_FALLBACK_DIGEST_LENGTH,
+        hasMarker: optionalBoolean(process.env.SIGNER_FALLBACK_HAS_MARKER, "SIGNER_FALLBACK_HAS_MARKER"),
+      });
       this.material = this.fallback;
       this.state.source = "configured-fallback";
     }
@@ -139,6 +151,22 @@ export class BrowserCalibrator {
         content: `(() => {
           const salt = ${JSON.stringify("obfiowerehiring")};
           const report = globalThis.__grok2apiReportStatsigDigest;
+          const remember = (value) => {
+            if (typeof value === "string" && value.includes(salt)) Promise.resolve(report(value)).catch(() => {});
+          };
+          const textEncoderPrototype = globalThis.TextEncoder?.prototype;
+          if (textEncoderPrototype && typeof report === "function") {
+            const originalEncode = textEncoderPrototype.encode;
+            if (typeof originalEncode === "function") textEncoderPrototype.encode = function (value) {
+              try { remember(value); } catch (_) {}
+              return originalEncode.call(this, value);
+            };
+            const originalEncodeInto = textEncoderPrototype.encodeInto;
+            if (typeof originalEncodeInto === "function") textEncoderPrototype.encodeInto = function (value, destination) {
+              try { remember(value); } catch (_) {}
+              return originalEncodeInto.call(this, value, destination);
+            };
+          }
           const subtle = globalThis.crypto && globalThis.crypto.subtle;
           if (!subtle || typeof subtle.digest !== "function" || typeof report !== "function") return;
           const original = subtle.digest.bind(subtle);
@@ -149,7 +177,7 @@ export class BrowserCalibrator {
               else if (ArrayBuffer.isView(data)) bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
               if (bytes) {
                 const text = new TextDecoder().decode(bytes);
-                if (text.includes(salt)) Promise.resolve(report(text)).catch(() => {});
+                remember(text);
               }
             } catch (_) {}
             return original(algorithm, data);
@@ -194,28 +222,34 @@ export class BrowserCalibrator {
       });
       const response = await page.goto(this.targetURL, { waitUntil: "domcontentloaded", timeout: this.timeoutMs });
       await page.waitForTimeout(this.settleMs);
-      let capture = observed.at(-1);
-      if (!capture) {
+      let material = null;
+      for (const capture of observed.toReversed()) {
+        try {
+          material = extractMaterialFromCapture({ ...capture, digestInputs });
+          break;
+        } catch (_) {}
+      }
+      if (!material) {
         const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const probe = page.evaluate(async ({ path, method, nonce }) => {
           const init = { method, credentials: "include", cache: "no-store", headers: { "x-grok2api-statsig-probe": nonce } };
           if (!["GET", "HEAD"].includes(method)) init.body = "{}";
           try { await fetch(path, init); } catch (_) {}
         }, { path: this.probePath, method: this.probeMethod, nonce });
-        capture = await Promise.race([
+        const capture = await Promise.race([
           probeCapture.promise,
           delay(this.timeoutMs).then(() => null),
         ]);
         await probe;
+        await delay(100);
+        if (capture) material = extractMaterialFromCapture({ ...capture, digestInputs });
       }
-      if (!capture) {
+      if (!material) {
         const status = response?.status();
         const title = await page.title().catch(() => "");
         const detail = [status ? `initial HTTP ${status}` : "", title ? `title ${JSON.stringify(title)}` : ""].filter(Boolean).join(", ");
         throw new Error(`browser did not produce an x-statsig-id request; Cloudflare or the page fetch interceptor may be blocking calibration${detail ? ` (${detail})` : ""}`);
       }
-      await delay(100);
-      const material = extractMaterialFromCapture({ ...capture, digestInputs });
       this.material = material;
       this.state.source = "browser";
       this.state.lastError = null;

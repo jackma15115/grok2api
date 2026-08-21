@@ -26,27 +26,48 @@ export function encodeBase64Raw(value) {
 
 export function decodeStatsigID(value) {
   const decoded = decodeBase64(value);
-  if (decoded.length !== 70) {
-    throw new Error(`x-statsig-id must decode to 70 bytes, got ${decoded.length}`);
+  let payloadOffset = -1;
+  let digestLength = 0;
+  for (let offset = 0; offset <= Math.min(8, decoded.length - 70); offset += 1) {
+    const candidateDigestLength = decoded.length - offset - 54;
+    if (candidateDigestLength >= 16 && candidateDigestLength <= 32 && (decoded[decoded.length - 1] ^ decoded[offset]) === STATSIG_MARK) {
+      payloadOffset = offset;
+      digestLength = candidateDigestLength;
+      break;
+    }
   }
-  const key = decoded[0];
+  const hasMarker = payloadOffset >= 0;
+  if (!hasMarker) {
+    payloadOffset = 0;
+    digestLength = decoded.length - 53;
+  }
+  if (digestLength < 16 || digestLength > 32) {
+    throw new Error(`x-statsig-id must contain a 16-32 byte digest prefix, got ${digestLength}`);
+  }
+  const key = decoded[payloadOffset];
   const seed = Buffer.alloc(48);
   for (let index = 0; index < seed.length; index += 1) {
-    seed[index] = decoded[index + 1] ^ key;
+    seed[index] = decoded[payloadOffset + index + 1] ^ key;
   }
   const number =
-    (decoded[49] ^ key)
-    | ((decoded[50] ^ key) << 8)
-    | ((decoded[51] ^ key) << 16)
-    | ((decoded[52] ^ key) << 24);
-  const digestPrefix = Buffer.alloc(16);
+    (decoded[payloadOffset + 49] ^ key)
+    | ((decoded[payloadOffset + 50] ^ key) << 8)
+    | ((decoded[payloadOffset + 51] ^ key) << 16)
+    | ((decoded[payloadOffset + 52] ^ key) << 24);
+  const digestPrefix = Buffer.alloc(digestLength);
   for (let index = 0; index < digestPrefix.length; index += 1) {
-    digestPrefix[index] = decoded[index + 53] ^ key;
+    digestPrefix[index] = decoded[payloadOffset + index + 53] ^ key;
   }
-  if ((decoded[69] ^ key) !== STATSIG_MARK) {
-    throw new Error("x-statsig-id has an invalid marker");
-  }
-  return { decoded, key, seed, number: number >>> 0, digestPrefix };
+  return {
+    decoded,
+    key,
+    seed,
+    number: number >>> 0,
+    digestPrefix,
+    digestLength,
+    hasMarker,
+    prefix: encodeBase64Raw(decoded.subarray(0, payloadOffset)),
+  };
 }
 
 export function normalizePath(value) {
@@ -91,7 +112,7 @@ export function extractMaterialFromCapture({ statsigID, method, path, digestInpu
   if (!hex || !/^[0-9a-f]+$/i.test(hex)) {
     throw new Error("browser Statsig digest contains an invalid HEX fingerprint");
   }
-  const expectedDigest = createHash("sha256").update(input).digest().subarray(0, 16);
+  const expectedDigest = createHash("sha256").update(input).digest().subarray(0, decoded.digestLength);
   if (!expectedDigest.equals(decoded.digestPrefix)) {
     throw new Error("browser x-statsig-id does not match its captured SHA input");
   }
@@ -100,6 +121,9 @@ export function extractMaterialFromCapture({ statsigID, method, path, digestInpu
     seedBytes: decoded.seed,
     hex: hex.toLowerCase(),
     number: decoded.number,
+    digestLength: decoded.digestLength,
+    hasMarker: decoded.hasMarker,
+    prefix: decoded.prefix,
     capturedStatsigID: statsigID,
     capturedMethod: normalizedMethod,
     capturedPath: normalizedPath,
@@ -107,7 +131,7 @@ export function extractMaterialFromCapture({ statsigID, method, path, digestInpu
   };
 }
 
-export function materialFromConfig(seedValue, hexValue) {
+export function materialFromConfig(seedValue, hexValue, options = {}) {
   const seed = decodeBase64(seedValue);
   if (seed.length !== 48) {
     throw new Error(`seed must decode to 48 bytes, got ${seed.length}`);
@@ -116,7 +140,23 @@ export function materialFromConfig(seedValue, hexValue) {
   if (!hex || !/^[0-9a-f]+$/.test(hex)) {
     throw new Error("hex must be a non-empty hexadecimal string");
   }
-  return { seed: encodeBase64Raw(seed), seedBytes: seed, hex, capturedAt: new Date().toISOString() };
+  const digestLength = options.digestLength === undefined || options.digestLength === "" ? 16 : Number(options.digestLength);
+  if (!Number.isInteger(digestLength) || digestLength < 16 || digestLength > 32) {
+    throw new Error("digest length must be an integer from 16 to 32");
+  }
+  const hasMarker = options.hasMarker === undefined || options.hasMarker === "" ? true : options.hasMarker;
+  if (typeof hasMarker !== "boolean") throw new Error("hasMarker must be a boolean");
+  const prefixBytes = options.prefix ? decodeBase64(options.prefix) : Buffer.alloc(0);
+  if (prefixBytes.length > 8) throw new Error("Statsig prefix is too large");
+  return {
+    seed: encodeBase64Raw(seed),
+    seedBytes: seed,
+    hex,
+    digestLength,
+    hasMarker,
+    prefix: encodeBase64Raw(prefixBytes),
+    capturedAt: new Date().toISOString(),
+  };
 }
 
 export function buildStatsig(material, method, path, nowSeconds = Math.floor(Date.now() / 1000), key = randomBytes(1)[0]) {
@@ -125,22 +165,31 @@ export function buildStatsig(material, method, path, nowSeconds = Math.floor(Dat
   if (!material?.seedBytes || material.seedBytes.length !== 48 || !material.hex) {
     throw new Error("Statsig material is incomplete");
   }
+  const digestLength = material.digestLength ?? 16;
+  const hasMarker = material.hasMarker ?? true;
+  if (!Number.isInteger(digestLength) || digestLength < 16 || digestLength > 32) {
+    throw new Error("Statsig digest length must be an integer from 16 to 32");
+  }
+  const prefix = material.prefix ? decodeBase64(material.prefix) : Buffer.alloc(0);
+  if (prefix.length > 8) throw new Error("Statsig prefix is too large");
   const number = (Math.floor(nowSeconds) - STATSIG_EPOCH) >>> 0;
   const input = digestInput(normalizedMethod, normalizedPath, number, material.hex);
   const digest = createHash("sha256").update(input).digest();
-  const output = Buffer.alloc(70);
-  output[0] = key;
+  const output = Buffer.alloc(prefix.length + 53 + digestLength + (hasMarker ? 1 : 0));
+  prefix.copy(output);
+  const offset = prefix.length;
+  output[offset] = key;
   for (let index = 0; index < 48; index += 1) {
-    output[index + 1] = material.seedBytes[index] ^ key;
+    output[offset + index + 1] = material.seedBytes[index] ^ key;
   }
-  output[49] = number ^ key;
-  output[50] = (number >>> 8) ^ key;
-  output[51] = (number >>> 16) ^ key;
-  output[52] = (number >>> 24) ^ key;
-  for (let index = 0; index < 16; index += 1) {
-    output[index + 53] = digest[index] ^ key;
+  output[offset + 49] = number ^ key;
+  output[offset + 50] = (number >>> 8) ^ key;
+  output[offset + 51] = (number >>> 16) ^ key;
+  output[offset + 52] = (number >>> 24) ^ key;
+  for (let index = 0; index < digestLength; index += 1) {
+    output[offset + index + 53] = digest[index] ^ key;
   }
-  output[69] = STATSIG_MARK ^ key;
+  if (hasMarker) output[output.length - 1] = STATSIG_MARK ^ key;
   return encodeBase64Raw(output);
 }
 

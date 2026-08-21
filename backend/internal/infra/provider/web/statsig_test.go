@@ -235,6 +235,19 @@ func TestStatsigSignerRejectsInvalidShape(t *testing.T) {
 	}
 }
 
+func TestValidStatsigIDAcceptsLegacyAndVersionPrefixedShapes(t *testing.T) {
+	for _, size := range []int{69, 70, 72, 94} {
+		if !validStatsigID(base64.RawStdEncoding.EncodeToString(make([]byte, size))) {
+			t.Fatalf("Statsig size %d was rejected", size)
+		}
+	}
+	for _, size := range []int{68, 95} {
+		if validStatsigID(base64.RawStdEncoding.EncodeToString(make([]byte, size))) {
+			t.Fatalf("Statsig size %d was accepted", size)
+		}
+	}
+}
+
 func TestValidateStatsigSignerEndpointUsesAdminURLBoundary(t *testing.T) {
 	for _, endpoint := range []string{
 		"https://grok.wodf.de/sign",

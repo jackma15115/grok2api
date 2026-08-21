@@ -4,6 +4,27 @@ import { chromium } from "playwright";
 import { solveFlareSolverr } from "./flaresolverr.mjs";
 import { computeStyleHEX, validateMaterial } from "./hex.mjs";
 import { currentMaterialStatus } from "./material.mjs";
+import { describeCaptureMismatch, extractMaterialFromCapture, STATSIG_SALT } from "./statsig.mjs";
+
+const PROBE_HEADER = "x-grok2api-statsig-probe";
+
+function createDeferred() {
+  let resolve;
+  const promise = new Promise((nextResolve) => { resolve = nextResolve; });
+  return { promise, resolve };
+}
+
+async function waitWithTimeout(promise, timeoutMs) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function parseProxy(value) {
   const raw = String(value ?? "").trim();
@@ -18,7 +39,7 @@ function parseProxy(value) {
 
 function materialCaptureScript() {
   return `(() => {
-    globalThis.__seedHexCatch = { outputs: [], paths: [], selected: null, styles: [] };
+    globalThis.__seedHexCatch = { digestInputs: [], paths: [], selected: null, styles: [] };
     const state = globalThis.__seedHexCatch;
     const rememberSVGs = (root) => {
       if (!root || root.nodeType !== Node.ELEMENT_NODE) return;
@@ -44,36 +65,55 @@ function materialCaptureScript() {
       return value;
     };
 
-    const originalBtoa = globalThis.btoa.bind(globalThis);
-    globalThis.btoa = function (value) {
-      try {
-        if (typeof value === 'string' && value.length === 70) {
-          const bytes = Array.from(value, (char) => char.charCodeAt(0));
-          if ((bytes[69] ^ bytes[0]) === 3) {
-            const key = bytes[0];
-            let binary = '';
-            for (let index = 1; index <= 48; index += 1) binary += String.fromCharCode(bytes[index] ^ key);
-            state.outputs.push({ seed: originalBtoa(binary).replace(/=+$/g, ''), styleIndex: state.styles.length - 1 });
-          }
-        }
-      } catch (_) {}
-      return originalBtoa(value);
+    const salt = ${JSON.stringify(STATSIG_SALT)};
+    const rememberDigestInput = (value) => {
+      if (typeof value === 'string' && value.length <= 4096 && value.includes(salt)) state.digestInputs.push(value);
     };
+    const textEncoderPrototype = globalThis.TextEncoder?.prototype;
+    if (textEncoderPrototype) {
+      const originalEncode = textEncoderPrototype.encode;
+      if (typeof originalEncode === 'function') textEncoderPrototype.encode = function (value) {
+        try { rememberDigestInput(value); } catch (_) {}
+        return originalEncode.call(this, value);
+      };
+      const originalEncodeInto = textEncoderPrototype.encodeInto;
+      if (typeof originalEncodeInto === 'function') textEncoderPrototype.encodeInto = function (value, destination) {
+        try { rememberDigestInput(value); } catch (_) {}
+        return originalEncodeInto.call(this, value, destination);
+      };
+    }
+
+    const subtle = globalThis.crypto && globalThis.crypto.subtle;
+    if (subtle && typeof subtle.digest === 'function') {
+      const originalDigest = subtle.digest.bind(subtle);
+      const wrappedDigest = function (algorithm, data) {
+        try {
+          let bytes = null;
+          if (data instanceof ArrayBuffer) bytes = new Uint8Array(data);
+          else if (ArrayBuffer.isView(data)) bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+          rememberDigestInput(bytes ? new TextDecoder().decode(bytes) : '');
+        } catch (_) {}
+        return originalDigest(algorithm, data);
+      };
+      let installed = false;
+      try {
+        Object.defineProperty(subtle, 'digest', { value: wrappedDigest, configurable: true });
+        installed = subtle.digest === wrappedDigest;
+      } catch (_) {}
+      if (!installed) try {
+        Object.defineProperty(Object.getPrototypeOf(subtle), 'digest', { value: wrappedDigest, configurable: true });
+      } catch (_) {}
+    }
 
     const originalComputedStyle = globalThis.getComputedStyle.bind(globalThis);
     globalThis.getComputedStyle = function (element, pseudoElement) {
       const style = originalComputedStyle(element, pseudoElement);
-      if (element?.tagName === 'DIV' && element.childElementCount === 0 && element.parentElement === document.body) {
-        const animation = element.getAnimations().find((item) => item.effect?.getComputedTiming()?.duration === 4096);
-        if (animation) {
-          state.styles.push({
-            color: style.color,
-            transform: style.transform,
-            selected: state.selected ? { ...state.selected } : null,
-            paths: state.paths.slice(),
-          });
+      try {
+        if (element?.tagName === 'DIV' && element.childElementCount === 0 && element.parentElement === document.body) {
+          const animation = element.getAnimations().find((item) => item.effect?.getComputedTiming()?.duration === 4096);
+          if (animation) state.styles.push({ color: style.color, transform: style.transform });
         }
-      }
+      } catch (_) {}
       return style;
     };
   })();`;
@@ -86,6 +126,8 @@ export class SVGMaterialCollector {
     this.flareSolverrTimeoutMs = options.flareSolverrTimeoutMs ?? Number(process.env.CATCH_FLARESOLVERR_TIMEOUT_MS ?? 90_000);
     this.browserTimeoutMs = options.browserTimeoutMs ?? Number(process.env.CATCH_BROWSER_TIMEOUT_MS ?? 60_000);
     this.pageSettleMs = options.pageSettleMs ?? Number(process.env.CATCH_PAGE_SETTLE_MS ?? 5_000);
+    this.probePath = options.probePath ?? process.env.CATCH_PROBE_PATH ?? "/rest/rate-limits";
+    this.probeMethod = options.probeMethod ?? process.env.CATCH_PROBE_METHOD ?? "POST";
     this.executablePath = options.executablePath ?? process.env.CATCH_BROWSER_EXECUTABLE_PATH ?? "";
     this.proxyURL = options.proxyURL ?? process.env.CATCH_PROXY_URL ?? "";
     this.headless = options.headless ?? process.env.CATCH_HEADLESS !== "false";
@@ -126,30 +168,95 @@ export class SVGMaterialCollector {
       await context.addCookies(clearance.cookies);
       const page = await context.newPage();
       await page.addInitScript({ content: materialCaptureScript() });
-      await page.goto(this.targetURL, { waitUntil: "domcontentloaded", timeout: this.browserTimeoutMs });
-      await page.waitForFunction(() => globalThis.__seedHexCatch?.outputs?.length > 0 && globalThis.__seedHexCatch?.styles?.length > 0, null, {
-        timeout: this.browserTimeoutMs,
+      const observed = [];
+      const probeCapture = createDeferred();
+      page.on("request", async (request) => {
+        try {
+          const headers = await request.allHeaders();
+          const statsigID = headers["x-statsig-id"];
+          if (statsigID) observed.push({ statsigID, method: request.method(), path: new URL(request.url()).pathname });
+        } catch (_) {}
       });
+      await context.route("**/*", async (route) => {
+        const request = route.request();
+        try {
+          const headers = await request.allHeaders();
+          if (headers[PROBE_HEADER]) {
+            if (headers["x-statsig-id"]) {
+              probeCapture.resolve({
+                statsigID: headers["x-statsig-id"],
+                method: request.method(),
+                path: new URL(request.url()).pathname,
+              });
+            }
+            await route.abort();
+            return;
+          }
+        } catch (_) {}
+        await route.continue();
+      });
+      const response = await page.goto(this.targetURL, { waitUntil: "domcontentloaded", timeout: this.browserTimeoutMs });
       await page.waitForTimeout(this.pageSettleMs);
-      const captured = await page.evaluate(() => structuredClone(globalThis.__seedHexCatch));
-      const output = captured.outputs.at(-1);
-      const style = captured.styles[output?.styleIndex] ?? captured.styles.at(-1);
-      if (!output?.seed || !style?.color || !style?.transform) throw new Error("natural Statsig material was not observed");
-
-      const seed = output.seed;
-      const hex = computeStyleHEX(style.color, style.transform);
+      let captured = await page.evaluate(() => structuredClone(globalThis.__seedHexCatch));
+      let hexCandidates = captured.styles.flatMap((style) => {
+        try { return [computeStyleHEX(style.color, style.transform)]; } catch { return []; }
+      });
+      let extracted = null;
+      const mismatches = [];
+      for (const capture of observed.toReversed()) {
+        try {
+          extracted = extractMaterialFromCapture({ ...capture, digestInputs: captured.digestInputs, hexCandidates });
+          break;
+        } catch (_) {
+          mismatches.push(describeCaptureMismatch({ ...capture, digestInputs: captured.digestInputs, hexCandidates }));
+        }
+      }
+      if (!extracted) {
+        const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const probe = page.evaluate(async ({ path, method, nonce }) => {
+          const init = {
+            method,
+            credentials: "include",
+            cache: "no-store",
+            headers: { "x-grok2api-statsig-probe": nonce },
+          };
+          if (!["GET", "HEAD"].includes(method)) init.body = "{}";
+          try { await fetch(path, init); } catch (_) {}
+        }, { path: this.probePath, method: this.probeMethod, nonce });
+        const capture = await waitWithTimeout(probeCapture.promise, this.browserTimeoutMs);
+        await probe;
+        captured = await page.evaluate(() => structuredClone(globalThis.__seedHexCatch));
+        hexCandidates = captured.styles.flatMap((style) => {
+          try { return [computeStyleHEX(style.color, style.transform)]; } catch { return []; }
+        });
+        if (capture) extracted = extractMaterialFromCapture({ ...capture, digestInputs: captured.digestInputs, hexCandidates });
+      }
+      if (!extracted) {
+        const status = response?.status();
+        const title = await page.title().catch(() => "");
+        const detail = [status ? `initial HTTP ${status}` : "", title ? `title ${JSON.stringify(title)}` : ""]
+          .filter(Boolean)
+          .join(", ");
+        const mismatchDetail = mismatches.length ? `; ${mismatches.slice(0, 4).join("; ")}` : "";
+        throw new Error(`browser did not produce a matching x-statsig-id request${detail ? ` (${detail})` : ""}${mismatchDetail}`);
+      }
+      const { seed, hex } = extracted;
       validateMaterial(seed, hex);
-      const selectedPath = style.selected?.path ?? "";
-      const completePaths = style.paths.length === 4 && style.paths.every((path) => typeof path === "string" && path.startsWith("M 10,30 C "));
-      const pathMaterial = completePaths ? style.paths : selectedPath ? [selectedPath] : [];
-      if (!pathMaterial.length) throw new Error("natural Statsig SVG path was not observed");
+      const paths = Array.isArray(captured.paths) ? captured.paths.filter(Boolean) : [];
+      const selectedPath = captured.selected?.path ?? "";
+      const pathMaterial = paths.length ? paths : selectedPath ? [selectedPath] : [];
 
       const nextMaterial = Object.freeze({
         seed,
         hex,
+        digestLength: extracted.digestLength,
+        hasMarker: extracted.hasMarker,
+        prefix: extracted.prefix,
         refreshedAt: new Date().toISOString(),
         pathVersion: createHash("sha256").update(pathMaterial.join("\n")).digest("hex"),
         pathCount: pathMaterial.length,
+        capturedMethod: extracted.capturedMethod,
+        capturedPath: extracted.capturedPath,
       });
       // Publish the validated seed/HEX pair with one reference replacement.
       this.material = nextMaterial;

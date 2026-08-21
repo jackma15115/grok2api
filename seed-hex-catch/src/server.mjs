@@ -13,6 +13,12 @@ let timer;
 
 async function refreshAndSchedule() {
   const material = await collector.refresh();
+  const status = collector.status();
+  if (material) {
+    console.log(`seed-hex-catch capture ready: path=${material.capturedMethod} ${material.capturedPath}, svgPaths=${material.pathCount}`);
+  } else {
+    console.error(`seed-hex-catch capture failed: ${status.lastError ?? "unknown error"}`);
+  }
   const delay = material ? refreshIntervalMs : retryIntervalMs;
   timer = setTimeout(() => void refreshAndSchedule(), delay);
   timer.unref();

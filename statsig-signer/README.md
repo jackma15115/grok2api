@@ -77,6 +77,10 @@ proxy, rate limiting, and an allowlist where possible.
 | `SIGNER_REFRESH_INTERVAL_MS` | `1800000` | Recalibration interval |
 | `SIGNER_PAGE_SETTLE_MS` | `5000` | Time allowed for page scripts or a browser challenge |
 | `SIGNER_API_TOKEN` | empty | Optional Bearer token for `/sign` and `/refresh` |
+| `SIGNER_FALLBACK_SEED` / `SIGNER_FALLBACK_HEX` | empty | Optional last-known-good material used until browser calibration succeeds |
+| `SIGNER_FALLBACK_PREFIX` | empty | Optional base64 protocol prefix captured with the fallback material |
+| `SIGNER_FALLBACK_DIGEST_LENGTH` | `16` | Digest prefix length captured with the fallback material |
+| `SIGNER_FALLBACK_HAS_MARKER` | `true` | Whether the fallback payload includes the trailing marker byte |
 
 The current Grok2API URL signer client does not send an Authorization header,
 so leave `SIGNER_API_TOKEN` empty when connecting it directly. Use the token
@@ -90,7 +94,9 @@ containers do not share the same public egress, Cloudflare may reject the
 transferred clearance.
 
 If calibration still fails, `/healthz` remains `503`. The service deliberately
-does not treat a random 70-byte value as ready.
+does not treat a random Statsig-shaped value as ready. Captured 70-byte legacy
+payloads and version-prefixed payloads such as the current 72-byte form are both
+preserved exactly.
 
 ## Tests
 

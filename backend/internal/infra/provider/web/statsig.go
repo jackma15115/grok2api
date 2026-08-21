@@ -422,7 +422,7 @@ func validStatsigID(value string) bool {
 	if err != nil {
 		decoded, err = base64.StdEncoding.DecodeString(value)
 	}
-	return err == nil && len(decoded) == 70
+	return err == nil && len(decoded) >= 69 && len(decoded) <= 94
 }
 
 func (a *Adapter) applySignedStatsig(ctx context.Context, request *http.Request, token string, lease *infraegress.Lease) {

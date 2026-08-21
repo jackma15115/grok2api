@@ -22,15 +22,21 @@ const (
 	statsigMark              = 0x03
 	remoteStatsigMaterialTTL = 10 * time.Minute
 	localStatsigFallbackTTL  = time.Minute
-	localStatsigSeedBase64   = "sNxHIO54yYnP4770Z9D4ziLsj1lk1iNZq3sn/FXhB53gt7pcrjvVTZUsqWyls+ON"
-	localStatsigHEX          = "6c2b600ee147ae147ae1805c28f5c28f5c2805c28f5c28f5c280ee147ae147ae1800"
+	localStatsigSeedBase64   = "AmawzIEMJXM6Sz8NetgNNGjfDmMzYpGmBm6M+MLKGfMtngNDlJnB7m+exx2Epiwc"
+	localStatsigHEX          = "4844a90fd70a3d70a3d701c28f5c28f5c2901c28f5c28f5c290fd70a3d70a3d700"
+	localStatsigPrefixBase64 = ""
+	localStatsigDigestLength = 16
+	localStatsigHasMarker    = true
 )
 
 var localStatsigSeed = mustDecodeLocalStatsigSeed(localStatsigSeedBase64)
 
 type localStatsigMaterial struct {
-	seed []byte
-	hex  string
+	seed         []byte
+	hex          string
+	prefix       []byte
+	digestLength int
+	hasMarker    bool
 }
 
 type localStatsigMaterialEntry struct {
@@ -52,7 +58,7 @@ func (s *statsigSigner) SignLocal(ctx context.Context, materialURL, method, path
 	if _, err := rand.Read(key[:]); err != nil {
 		return "", "", err
 	}
-	value, err := buildLocalStatsig(material.seed, material.hex, pathname, method, s.now().Unix(), key[0])
+	value, err := buildLocalStatsig(material, pathname, method, s.now().Unix(), key[0])
 	if err != nil {
 		return "", "", err
 	}
@@ -91,7 +97,7 @@ func (s *statsigSigner) cachedLocalMaterial(key string, now time.Time) (localSta
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry, ok := s.localMaterials[key]
-	if !ok || len(entry.material.seed) != 48 || entry.material.hex == "" || !now.Before(entry.expiresAt) {
+	if !ok || !validLocalStatsigMaterial(entry.material) || !now.Before(entry.expiresAt) {
 		return localStatsigMaterial{}, false
 	}
 	return cloneLocalStatsigMaterial(entry.material), true
@@ -104,7 +110,13 @@ func (s *statsigSigner) storeLocalMaterial(key string, material localStatsigMate
 }
 
 func cloneLocalStatsigMaterial(material localStatsigMaterial) localStatsigMaterial {
-	return localStatsigMaterial{seed: append([]byte(nil), material.seed...), hex: material.hex}
+	return localStatsigMaterial{
+		seed:         append([]byte(nil), material.seed...),
+		hex:          material.hex,
+		prefix:       append([]byte(nil), material.prefix...),
+		digestLength: material.digestLength,
+		hasMarker:    material.hasMarker,
+	}
 }
 
 func (s *statsigSigner) InvalidateLocal(materialURL string) {
@@ -118,10 +130,24 @@ func (s *statsigSigner) InvalidateLocal(materialURL string) {
 }
 
 func embeddedLocalStatsigMaterial() localStatsigMaterial {
-	return localStatsigMaterial{seed: localStatsigSeed, hex: localStatsigHEX}
+	prefix, err := decodeOptionalLocalStatsigBase64(localStatsigPrefixBase64)
+	if err != nil {
+		panic("invalid embedded local Statsig prefix")
+	}
+	return localStatsigMaterial{
+		seed:         localStatsigSeed,
+		hex:          localStatsigHEX,
+		prefix:       prefix,
+		digestLength: localStatsigDigestLength,
+		hasMarker:    localStatsigHasMarker,
+	}
 }
 
 func newLocalStatsigMaterialPair(seedValue, hexValue string) (localStatsigMaterial, error) {
+	return newLocalStatsigMaterial(seedValue, hexValue, "", 0, nil)
+}
+
+func newLocalStatsigMaterial(seedValue, hexValue, prefixValue string, digestLength int, hasMarkerValue *bool) (localStatsigMaterial, error) {
 	seedValue = strings.TrimSpace(seedValue)
 	hexValue = strings.ToLower(strings.TrimSpace(hexValue))
 	seed, err := base64.StdEncoding.DecodeString(seedValue)
@@ -139,7 +165,27 @@ func newLocalStatsigMaterialPair(seedValue, hexValue string) (localStatsigMateri
 			return localStatsigMaterial{}, errors.New("remote Statsig hex is invalid")
 		}
 	}
-	return localStatsigMaterial{seed: seed, hex: hexValue}, nil
+	prefix, err := decodeOptionalLocalStatsigBase64(prefixValue)
+	if err != nil || len(prefix) > 8 {
+		return localStatsigMaterial{}, errors.New("remote Statsig prefix is invalid")
+	}
+	if digestLength == 0 {
+		digestLength = 16
+	}
+	if digestLength < 16 || digestLength > 32 {
+		return localStatsigMaterial{}, errors.New("remote Statsig digest length is invalid")
+	}
+	hasMarker := true
+	if hasMarkerValue != nil {
+		hasMarker = *hasMarkerValue
+	}
+	return localStatsigMaterial{
+		seed:         seed,
+		hex:          hexValue,
+		prefix:       prefix,
+		digestLength: digestLength,
+		hasMarker:    hasMarker,
+	}, nil
 }
 
 func (s *statsigSigner) requestLocalMaterial(ctx context.Context, endpoint string) (localStatsigMaterial, time.Time, error) {
@@ -167,14 +213,17 @@ func (s *statsigSigner) requestLocalMaterial(ctx context.Context, endpoint strin
 		return localStatsigMaterial{}, time.Time{}, fmt.Errorf("remote Statsig material returned %d", response.StatusCode)
 	}
 	var payload struct {
-		Seed      string `json:"seed"`
-		HEX       string `json:"hex"`
-		ExpiresAt string `json:"expiresAt"`
+		Seed         string `json:"seed"`
+		HEX          string `json:"hex"`
+		Prefix       string `json:"prefix"`
+		DigestLength int    `json:"digestLength"`
+		HasMarker    *bool  `json:"hasMarker"`
+		ExpiresAt    string `json:"expiresAt"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return localStatsigMaterial{}, time.Time{}, errors.New("remote Statsig material returned invalid JSON")
 	}
-	material, err := newLocalStatsigMaterialPair(payload.Seed, payload.HEX)
+	material, err := newLocalStatsigMaterial(payload.Seed, payload.HEX, payload.Prefix, payload.DigestLength, payload.HasMarker)
 	if err != nil {
 		return localStatsigMaterial{}, time.Time{}, err
 	}
@@ -193,12 +242,12 @@ func generateLocalStatsig(pathname, method string, now time.Time) (string, error
 	if _, err := rand.Read(key[:]); err != nil {
 		return "", err
 	}
-	return buildLocalStatsig(localStatsigSeed, localStatsigHEX, pathname, method, now.Unix(), key[0])
+	return buildLocalStatsig(embeddedLocalStatsigMaterial(), pathname, method, now.Unix(), key[0])
 }
 
-func buildLocalStatsig(seed []byte, hexValue, pathname, method string, nowUnix int64, key byte) (string, error) {
-	if len(seed) != 48 {
-		return "", errors.New("local Statsig seed must contain 48 bytes")
+func buildLocalStatsig(material localStatsigMaterial, pathname, method string, nowUnix int64, key byte) (string, error) {
+	if !validLocalStatsigMaterial(material) {
+		return "", errors.New("local Statsig material is invalid")
 	}
 	if pathname == "" {
 		pathname = "/"
@@ -207,30 +256,57 @@ func buildLocalStatsig(seed []byte, hexValue, pathname, method string, nowUnix i
 	number := uint32(nowUnix - statsigEpoch)
 
 	var input strings.Builder
-	input.Grow(len(method) + len(pathname) + len(hexValue) + 40)
+	input.Grow(len(method) + len(pathname) + len(material.hex) + 40)
 	input.WriteString(method)
 	input.WriteByte('!')
 	input.WriteString(pathname)
 	input.WriteByte('!')
 	input.WriteString(strconv.FormatUint(uint64(number), 10))
 	input.WriteString(statsigSalt)
-	input.WriteString(hexValue)
+	input.WriteString(material.hex)
 	digest := sha256.Sum256([]byte(input.String()))
 
-	output := make([]byte, 70)
-	output[0] = key
+	markerLength := 0
+	if material.hasMarker {
+		markerLength = 1
+	}
+	output := make([]byte, len(material.prefix)+53+material.digestLength+markerLength)
+	copy(output, material.prefix)
+	offset := len(material.prefix)
+	output[offset] = key
 	for i := 0; i < 48; i++ {
-		output[1+i] = seed[i] ^ key
+		output[offset+1+i] = material.seed[i] ^ key
 	}
-	output[49] = byte(number) ^ key
-	output[50] = byte(number>>8) ^ key
-	output[51] = byte(number>>16) ^ key
-	output[52] = byte(number>>24) ^ key
-	for i := 0; i < 16; i++ {
-		output[53+i] = digest[i] ^ key
+	output[offset+49] = byte(number) ^ key
+	output[offset+50] = byte(number>>8) ^ key
+	output[offset+51] = byte(number>>16) ^ key
+	output[offset+52] = byte(number>>24) ^ key
+	for i := 0; i < material.digestLength; i++ {
+		output[offset+53+i] = digest[i] ^ key
 	}
-	output[69] = statsigMark ^ key
+	if material.hasMarker {
+		output[len(output)-1] = statsigMark ^ key
+	}
 	return base64.RawStdEncoding.EncodeToString(output), nil
+}
+
+func validLocalStatsigMaterial(material localStatsigMaterial) bool {
+	return len(material.seed) == 48 && material.hex != "" && len(material.prefix) <= 8 && material.digestLength >= 16 && material.digestLength <= 32
+}
+
+func decodeOptionalLocalStatsigBase64(value string) ([]byte, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		decoded, err = base64.RawStdEncoding.DecodeString(value)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return decoded, nil
 }
 
 func mustDecodeLocalStatsigSeed(value string) []byte {

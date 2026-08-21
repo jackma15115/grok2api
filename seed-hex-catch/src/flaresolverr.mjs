@@ -40,6 +40,5 @@ export async function solveFlareSolverr({ baseURL, targetURL, proxyURL = "", tim
     if (!name || !value || value.length > 16 * 1024 || /[\x00-\x1f\x7f]/.test(value)) return [];
     return [{ name, value, domain: new URL(targetURL).hostname, path: "/" }];
   }) : [];
-  if (!cookies.length) throw new Error("FlareSolverr returned no cookies");
   return { userAgent, cookies };
 }

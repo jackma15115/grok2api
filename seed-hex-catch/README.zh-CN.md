@@ -2,14 +2,14 @@
 
 [English](README.md) | 简体中文
 
-`seed-hex-catch` 会定期观察 Grok Statsig 模块使用的瞬时 SVG path，读取运行时
-实际选用的 seed 和浏览器已计算的动画样式，独立编码 HEX，并使用当前浏览器采集的
-材料提供与 `grok.wodf.de/sign` 兼容的签名接口。
+`seed-hex-catch` 会定期观察 Grok 真实的 Statsig 请求及其对应的 Web Crypto 摘要输入，
+经过校验后提取当前 seed 和 HEX，并使用当前浏览器采集的材料提供与
+`grok.wodf.de/sign` 兼容的签名接口。
 
-发布镜像在同一个容器内包含 FlareSolverr、Chromium、Playwright 和采集器。浏览器采集器
-不会 hook 自然产生的 `x-statsig-id` 请求或 Web Crypto SHA 输入。服务启动时立即刷新，
-之后默认每 10 分钟刷新一次。每轮只在全新的浏览器上下文中打开一个自然页面，将 seed、
-实际选中的 SVG path 和 computed style 配对后关闭浏览器。
+发布镜像在同一个容器内包含 FlareSolverr、Chromium、Playwright 和采集器。服务启动时立即刷新，
+之后默认每 10 分钟刷新一次。每轮在全新的浏览器上下文中打开页面，观察自然产生的
+`x-statsig-id` 请求；如果没有自然请求，则发送一个会被拦截的同源探针。请求与 SHA 输入
+匹配后关闭浏览器。SVG path 仅保留为可选诊断元数据。
 
 ## 启动
 
@@ -66,8 +66,10 @@ http://seed-hex-catch:8789/material
 | `CATCH_REFRESH_INTERVAL_MS` | `600000` | 成功后的刷新周期 |
 | `CATCH_RETRY_INTERVAL_MS` | `15000` | 失败后的重试周期 |
 | `CATCH_FLARESOLVERR_TIMEOUT_MS` | `90000` | Cloudflare 求解超时 |
-| `CATCH_BROWSER_TIMEOUT_MS` | `60000` | 单个页面的 path 捕获超时 |
-| `CATCH_PAGE_SETTLE_MS` | `5000` | 等待运行时 seed/style 配对稳定的时间 |
+| `CATCH_BROWSER_TIMEOUT_MS` | `60000` | 单个页面的 Statsig 捕获超时 |
+| `CATCH_PAGE_SETTLE_MS` | `5000` | 发送探针前等待自然 Statsig 请求的时间 |
+| `CATCH_PROBE_PATH` | `/rest/rate-limits` | 同源回退探针路径 |
+| `CATCH_PROBE_METHOD` | `POST` | 回退探针方法 |
 | `CATCH_PROXY_URL` | 空 | FlareSolverr 与 Chromium 共用的 HTTP(S)/SOCKS5 出口 |
 | `CATCH_MAX_BODY_BYTES` | `65536` | `/sign` 请求体大小上限 |
 | `CATCH_API_TOKEN` | 空 | 可选的 API Bearer Token |
@@ -75,5 +77,5 @@ http://seed-hex-catch:8789/material
 Compose 默认提供 128 MiB 共享内存。如果宿主机 Chromium 版本需要更多空间，
 可通过 `SEED_HEX_CATCH_SHM_SIZE` 调整。
 
-采集器从浏览器运行时读取 path 和 seed，因此可以自动跟随两者轮换。如果 Grok
-修改外围运行时结构，仍可能需要升级程序。
+采集器发布 seed/HEX 前会校验捕获的 SHA 前缀，因此无关的浏览器加密调用不会成为签名材料。
+如果 Grok 修改 Statsig 请求格式，仍可能需要升级程序。

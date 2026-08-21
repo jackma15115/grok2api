@@ -65,12 +65,17 @@ http://statsig-signer:8787/sign
 | `SIGNER_REFRESH_INTERVAL_MS` | `1800000` | 重新校准间隔 |
 | `SIGNER_PAGE_SETTLE_MS` | `5000` | 等待页面脚本或浏览器 challenge 的时间 |
 | `SIGNER_API_TOKEN` | 空 | `/sign` 和 `/refresh` 的可选 Bearer Token |
+| `SIGNER_FALLBACK_SEED` / `SIGNER_FALLBACK_HEX` | 空 | 浏览器校准完成前可使用的最近一次有效材料 |
+| `SIGNER_FALLBACK_PREFIX` | 空 | fallback 材料捕获到的可选 base64 协议前缀 |
+| `SIGNER_FALLBACK_DIGEST_LENGTH` | `16` | fallback 材料捕获到的摘要前缀长度 |
+| `SIGNER_FALLBACK_HAS_MARKER` | `true` | fallback payload 是否包含末尾 marker 字节 |
 
 当前 Grok2API 的 URL signer 客户端不会发送 Authorization 请求头，因此直接连接时应保持 `SIGNER_API_TOKEN` 为空。只有在客户端或反向代理能够添加 Bearer Token 时才启用它。
 
 配置 FlareSolverr 后，signer 会先使用相同的 `SIGNER_PROXY_URL` 请求 Grok 页面，再把获得的 Cloudflare Cookie 和 User-Agent 注入 Playwright。FlareSolverr 无法执行 Statsig SHA hook，因此最终捕获仍必须由 Playwright 完成。如果两个容器的公网出口不一致，Cloudflare 可能拒绝转移后的 clearance。
 
-校准失败时 `/healthz` 保持 `503`。服务不会把随机的 70 字节值当作有效签名材料。
+校准失败时 `/healthz` 保持 `503`。服务不会把随机的 Statsig 形状数据当作有效签名材料；
+旧版 70 字节 payload 与当前这类带版本前缀的 72 字节 payload 都会按捕获格式原样保留。
 
 ## 测试
 

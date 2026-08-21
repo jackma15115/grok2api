@@ -8,6 +8,7 @@ const executablePath = process.env.SIGNER_TEST_BROWSER;
 const seed = Array.from({ length: 48 }, (_, index) => index + 1);
 const seedBase64 = Buffer.from(seed).toString("base64").replace(/=+$/, "");
 const hex = "ad36d100100";
+const prefix = [0x02, 0x01];
 
 const fixtureHTML = `<!doctype html>
 <script>
@@ -24,15 +25,17 @@ window.fetch = async function(input, init = {}) {
   const digestInput = method + "!" + url.pathname + "!" + number + "obfiowerehiring" + hex;
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(digestInput)));
   const key = 37;
-  const output = new Uint8Array(70);
-  output[0] = key;
-  for (let i = 0; i < 48; i += 1) output[i + 1] = seed[i] ^ key;
-  output[49] = number ^ key;
-  output[50] = (number >>> 8) ^ key;
-  output[51] = (number >>> 16) ^ key;
-  output[52] = (number >>> 24) ^ key;
-  for (let i = 0; i < 16; i += 1) output[i + 53] = digest[i] ^ key;
-  output[69] = 3 ^ key;
+  const output = new Uint8Array(72);
+  output.set(${JSON.stringify(prefix)});
+  const offset = 2;
+  output[offset] = key;
+  for (let i = 0; i < 48; i += 1) output[offset + i + 1] = seed[i] ^ key;
+  output[offset + 49] = number ^ key;
+  output[offset + 50] = (number >>> 8) ^ key;
+  output[offset + 51] = (number >>> 16) ^ key;
+  output[offset + 52] = (number >>> 24) ^ key;
+  for (let i = 0; i < 16; i += 1) output[offset + i + 53] = digest[i] ^ key;
+  output[71] = 3 ^ key;
   let binary = "";
   for (const value of output) binary += String.fromCharCode(value);
   const headers = new Headers(init.headers || {});
@@ -71,6 +74,9 @@ test("calibrates from a browser request and matching Web Crypto input", { skip: 
     assert.equal(calibrator.status().lastError, null);
     assert.equal(material.seed, seedBase64);
     assert.equal(material.hex, hex);
+    assert.equal(material.prefix, "AgE");
+    assert.equal(material.digestLength, 16);
+    assert.equal(material.hasMarker, true);
     assert.equal(material.capturedMethod, "POST");
     assert.equal(material.capturedPath, "/rest/rate-limits");
     assert.equal(calibrator.status().clearanceSource, "flaresolverr");
