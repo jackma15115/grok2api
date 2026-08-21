@@ -41,6 +41,8 @@ func TestClassifyQualityHold(t *testing.T) {
 		{name: "empty terminal waits for transport handling", sig: QualityStreamSignals{Terminal: true}, want: QualityWait},
 		{name: "midstream enough content withhold", sig: QualityStreamSignals{VisibleTokens: 64}, want: QualityWithhold},
 		{name: "stub midstream waits even with enough visible", sig: QualityStreamSignals{ReasoningStarted: true, VisibleTokens: 64}, want: QualityWait},
+		{name: "stub hold expiry is inconclusive and delivers", sig: QualityStreamSignals{ReasoningStarted: true, VisibleTokens: 64, HoldExpired: true}, want: QualityDeliver},
+		{name: "stub-only hold expiry keeps waiting", sig: QualityStreamSignals{ReasoningStarted: true, HoldExpired: true}, want: QualityWait},
 		{name: "stub terminal enough withhold", sig: QualityStreamSignals{ReasoningStarted: true, VisibleTokens: 64, Terminal: true}, want: QualityWithhold},
 		{name: "wait for more", sig: QualityStreamSignals{VisibleTokens: 8}, want: QualityWait},
 		{name: "hold expired short delivers", sig: QualityStreamSignals{VisibleTokens: 8, HoldExpired: true}, want: QualityDeliver},
@@ -606,6 +608,64 @@ func TestPeekQualityStreamHoldTimeoutInterruptsBlockedReadAndPreservesRemainder(
 	}
 }
 
+func TestPeekQualityStreamHoldTimeoutDeliversStartedReasoningAndPreservesLateEvidence(t *testing.T) {
+	t.Parallel()
+	reader, writer := io.Pipe()
+	content := strings.Repeat("abcd", 40)
+	first := sse(
+		`data: {"type":"response.output_item.added","item":{"id":"rs_1","type":"reasoning"}}`,
+		`data: {"type":"response.output_text.delta","delta":"`+content+`"}`,
+	)
+	second := sse(
+		`data: {"type":"response.output_item.done","item":{"id":"rs_1","type":"reasoning","encrypted_content":"late-proof"}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_1","usage":{"output_tokens":40,"output_tokens_details":{"reasoning_tokens":20}}}}`,
+	)
+	writeErr := make(chan error, 1)
+	continueWrite := make(chan struct{})
+	go func() {
+		if _, err := io.WriteString(writer, first); err != nil {
+			writeErr <- err
+			return
+		}
+		select {
+		case <-continueWrite:
+		case <-time.After(500 * time.Millisecond):
+		}
+		if _, err := io.WriteString(writer, second); err != nil {
+			writeErr <- err
+			return
+		}
+		writeErr <- writer.Close()
+	}()
+
+	started := time.Now()
+	replay, verdict, _, _, err := peekQualityStream(context.Background(), reader, qualityProtocolResponses, QualityRetryRuntime{
+		MinOutputTokens: 8,
+		HoldTimeout:     30 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replay.Close()
+	if elapsed := time.Since(started); elapsed < 20*time.Millisecond || elapsed > 200*time.Millisecond {
+		t.Fatalf("peek returned after %s, want the 30ms hold timeout", elapsed)
+	}
+	if verdict != QualityDeliver {
+		t.Fatalf("started reasoning at hold timeout verdict = %s, want deliver", verdict)
+	}
+	close(continueWrite)
+	body, err := io.ReadAll(replay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-writeErr; err != nil {
+		t.Fatal(err)
+	}
+	if got := string(body); !strings.Contains(got, content) || !strings.Contains(got, `"encrypted_content":"late-proof"`) {
+		t.Fatalf("replay lost late reasoning evidence: %q", got)
+	}
+}
+
 func TestPeekQualityStreamHoldTimeoutEmptyDoesNotFailOpen(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancelCause(context.Background())
@@ -637,6 +697,205 @@ func TestPeekQualityStreamHoldTimeoutEmptyDoesNotFailOpen(t *testing.T) {
 	}
 	if verdict != QualityWait {
 		t.Fatalf("verdict=%s, want wait so the loop does not fail-open", verdict)
+	}
+}
+
+func TestPeekQualityStreamHoldTimeoutStubOnlyDoesNotFailOpen(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	reader, writer := io.Pipe()
+	defer writer.Close()
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := io.WriteString(writer, sse(": grok2api-reasoning-start"))
+		writeDone <- err
+	}()
+	done := make(chan struct{})
+	var verdict QualityVerdict
+	var peekErr error
+	go func() {
+		defer close(done)
+		_, verdict, _, _, peekErr = peekQualityStream(ctx, reader, qualityProtocolChat, QualityRetryRuntime{
+			MinOutputTokens: 8,
+			HoldTimeout:     20 * time.Millisecond,
+		})
+	}()
+	if err := <-writeDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+		t.Fatal("stub-only hold timeout must keep reading, not release an empty stream")
+	case <-time.After(50 * time.Millisecond):
+	}
+	cancel(neterrorpkg.ErrUpstreamStreamIdleTimeout)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("peekQualityStream did not return after stub-only idle cancel")
+	}
+	if !neterrorpkg.IsUpstreamStreamIdleTimeout(peekErr) {
+		t.Fatalf("peekErr = %v, want idle timeout", peekErr)
+	}
+	if verdict != QualityWait {
+		t.Fatalf("verdict=%s, want wait so the loop retries as transport", verdict)
+	}
+}
+
+type qualityOpenPeekResult struct {
+	replay  io.ReadCloser
+	verdict QualityVerdict
+	err     error
+}
+
+func peekOpenQualityStreamForTest(t *testing.T, protocol, stream string) qualityOpenPeekResult {
+	t.Helper()
+	reader, writer := io.Pipe()
+	done := make(chan qualityOpenPeekResult, 1)
+	go func() {
+		replay, verdict, _, _, err := peekQualityStream(
+			context.Background(), reader, protocol,
+			QualityRetryRuntime{MinOutputTokens: 32, HoldTimeout: 2 * time.Second},
+		)
+		done <- qualityOpenPeekResult{replay: replay, verdict: verdict, err: err}
+	}()
+	if _, err := io.WriteString(writer, stream); err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	select {
+	case result := <-done:
+		_ = writer.Close()
+		return result
+	case <-time.After(500 * time.Millisecond):
+		_ = writer.CloseWithError(errors.New("test terminal stream timeout"))
+		result := <-done
+		if result.replay != nil {
+			_ = result.replay.Close()
+		}
+		t.Fatal("terminal stream waited for hold/idle instead of finishing while the connection remained open")
+		return qualityOpenPeekResult{}
+	}
+}
+
+func TestPeekQualityStreamEmptyCompletedRetriesWithoutIdle(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name     string
+		protocol string
+		stream   string
+	}{
+		{
+			name:     "responses completed",
+			protocol: qualityProtocolResponses,
+			stream: sse(
+				`data: {"type":"response.completed","response":{"id":"resp_1","usage":{"output_tokens":0}}}`,
+			),
+		},
+		{
+			name:     "responses completed with empty text node",
+			protocol: qualityProtocolResponses,
+			stream: sse(
+				`data: {"type":"response.completed","response":{"id":"resp_1","output":[{"type":"message","content":[{"type":"output_text","text":""}]}],"usage":{"output_tokens":0}}}`,
+			),
+		},
+		{name: "chat done", protocol: qualityProtocolChat, stream: sse("data: [DONE]")},
+		{
+			name:     "chat finish reason",
+			protocol: qualityProtocolChat,
+			stream:   sse(`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`),
+		},
+		{name: "anthropic message stop", protocol: qualityProtocolAnthropic, stream: sse(`data: {"type":"message_stop"}`)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := peekOpenQualityStreamForTest(t, test.protocol, test.stream)
+			if result.replay != nil {
+				defer result.replay.Close()
+			}
+			if !errors.Is(result.err, errQualityEmptyStream) {
+				t.Fatalf("peek error = %v, want empty stream", result.err)
+			}
+			if result.verdict != QualityWait {
+				t.Fatalf("verdict = %s, want wait so the attempt loop retries as transport", result.verdict)
+			}
+		})
+	}
+}
+
+func TestPeekQualityStreamTerminalSemanticOutputIsNotEmpty(t *testing.T) {
+	t.Parallel()
+	longText := strings.Repeat("word ", 40)
+	shortText := strings.Repeat("a", 80)
+	for _, test := range []struct {
+		name        string
+		protocol    string
+		stream      string
+		wantVerdict QualityVerdict
+	}{
+		{
+			name:     "responses aggregate function call",
+			protocol: qualityProtocolResponses,
+			stream: sse(
+				`data: {"type":"response.completed","response":{"id":"resp_1","output":[{"type":"function_call","call_id":"call_1","name":"read_file","arguments":"{}"}]}}`,
+			),
+			wantVerdict: QualityDeliver,
+		},
+		{
+			name:     "responses streamed function call",
+			protocol: qualityProtocolResponses,
+			stream: sse(
+				`data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_1","name":"read_file","arguments":""}}`,
+				`data: {"type":"response.completed","response":{"id":"resp_1","output":[]}}`,
+			),
+			wantVerdict: QualityDeliver,
+		},
+		{
+			name:     "chat tool call",
+			protocol: qualityProtocolChat,
+			stream: sse(
+				`data: {"choices":[{"delta":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`,
+			),
+			wantVerdict: QualityDeliver,
+		},
+		{
+			name:     "anthropic tool use",
+			protocol: qualityProtocolAnthropic,
+			stream: sse(
+				`data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"tool_1","name":"read_file","input":{}}}`,
+				`data: {"type":"message_stop"}`,
+			),
+			wantVerdict: QualityDeliver,
+		},
+		{
+			name:     "responses aggregate long text",
+			protocol: qualityProtocolResponses,
+			stream: sse(
+				`data: {"type":"response.completed","response":{"id":"resp_1","output":[{"type":"message","content":[{"type":"output_text","text":"` + longText + `"}]}]}}`,
+			),
+			wantVerdict: QualityWithhold,
+		},
+		{
+			name:     "responses aggregate does not double count deltas",
+			protocol: qualityProtocolResponses,
+			stream: sse(
+				`data: {"type":"response.output_text.delta","delta":"`+shortText+`"}`,
+				`data: {"type":"response.completed","response":{"id":"resp_1","output":[{"type":"message","content":[{"type":"output_text","text":"`+shortText+`"}]}]}}`,
+			),
+			wantVerdict: QualityDeliver,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := peekOpenQualityStreamForTest(t, test.protocol, test.stream)
+			if result.replay != nil {
+				defer result.replay.Close()
+			}
+			if result.err != nil {
+				t.Fatalf("peek error = %v, want semantic output", result.err)
+			}
+			if result.verdict != test.wantVerdict {
+				t.Fatalf("verdict = %s, want %s", result.verdict, test.wantVerdict)
+			}
+		})
 	}
 }
 
@@ -932,8 +1191,8 @@ func TestAttemptLoopQualityHold(t *testing.T) {
 	if emptyAccount.FailureCount != 1 || emptyAccount.CooldownUntil == nil {
 		t.Fatalf("empty stream account was not cooled: %#v", emptyAccount)
 	}
-	if remaining := time.Until(*emptyAccount.CooldownUntil); remaining < 23*time.Hour || remaining > 24*time.Hour+time.Minute {
-		t.Fatalf("empty stream cooldown = %s, want about 24h", remaining)
+	if remaining := time.Until(*emptyAccount.CooldownUntil); remaining < 14*time.Minute || remaining > 15*time.Minute+time.Minute {
+		t.Fatalf("empty stream cooldown = %s, want about 15m", remaining)
 	}
 	noThinkingAccount, err := accountRepo.Get(ctx, credentials[1].ID)
 	if err != nil {
@@ -942,8 +1201,8 @@ func TestAttemptLoopQualityHold(t *testing.T) {
 	if !noThinkingAccount.Enabled || noThinkingAccount.LastError != lastErrorMissingThinking || noThinkingAccount.CooldownUntil == nil {
 		t.Fatalf("missing-thinking account was not cooled: %#v", noThinkingAccount)
 	}
-	if remaining := time.Until(*noThinkingAccount.CooldownUntil); remaining < 23*time.Hour || remaining > 24*time.Hour+time.Minute {
-		t.Fatalf("missing-thinking cooldown = %s, want about 24h", remaining)
+	if remaining := time.Until(*noThinkingAccount.CooldownUntil); remaining < 11*time.Hour || remaining > 12*time.Hour+time.Minute {
+		t.Fatalf("missing-thinking cooldown = %s, want about 12h", remaining)
 	}
 	logs, total, err := auditRepo.List(ctx, 0, 20)
 	if err != nil {
@@ -1150,7 +1409,7 @@ func TestAttemptLoopQualityFailOpenFallbackAndTotalAttemptCap(t *testing.T) {
 func TestNormalizeQualityRetryDefaults(t *testing.T) {
 	t.Parallel()
 	got := normalizeQualityRetry(QualityRetryRuntime{Enabled: true})
-	if !got.Enabled || got.MaxAttempts != 6 || got.MinOutputTokens != 32 || got.OnExhausted != qualityRetryFailClosed || got.HoldTimeout != 3*time.Second || got.AccountCooldown != 24*time.Hour {
+	if !got.Enabled || got.MaxAttempts != 6 || got.MinOutputTokens != 8 || got.OnExhausted != qualityRetryFailClosed || got.HoldTimeout != 30*time.Second || got.AccountCooldown != 12*time.Hour || got.IdleAccountCooldown != 15*time.Minute {
 		t.Fatalf("defaults = %#v", got)
 	}
 }
