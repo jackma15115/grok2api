@@ -253,6 +253,7 @@ type AuditConfig struct {
 	FlushInterval               Duration `yaml:"flushInterval"`
 	CommitDelay                 Duration `yaml:"commitDelay"`
 	RetentionDays               int      `yaml:"retentionDays"`
+	RetentionCount              int      `yaml:"retentionCount"`
 	LedgerMode                  string   `yaml:"ledgerMode"`
 	LedgerFailureThreshold      int      `yaml:"ledgerFailureThreshold"`
 	LedgerUnhealthyGrace        Duration `yaml:"ledgerUnhealthyGrace"`
@@ -702,6 +703,9 @@ func (c Config) Validate() error {
 	if c.Audit.RetentionDays < 0 || c.Audit.RetentionDays > 365 {
 		return errors.New("audit.retentionDays 必须在 0 到 365 之间")
 	}
+	if c.Audit.RetentionCount < -1 || c.Audit.RetentionCount > 1000000000 {
+		return errors.New("audit.retentionCount 必须在 -1 到 1000000000 之间")
+	}
 	if c.Audit.LedgerMode != "observe" && c.Audit.LedgerMode != "enforce" {
 		return errors.New("audit.ledgerMode 必须是 observe 或 enforce")
 	}
@@ -943,8 +947,8 @@ func defaultConfig() Config {
 		},
 		Audit: AuditConfig{
 			BufferSize: 16384, BatchSize: 256, FlushInterval: Duration(250 * time.Millisecond), CommitDelay: Duration(5 * time.Millisecond),
-			RetentionDays: 7,
-			LedgerMode:    "enforce", LedgerFailureThreshold: 1,
+			RetentionDays: 7, RetentionCount: -1,
+			LedgerMode: "enforce", LedgerFailureThreshold: 1,
 			LedgerUnhealthyGrace: Duration(10 * time.Second), LedgerQueueHighWatermarkPct: 90,
 		},
 		QualityGuard: QualityGuardConfig{

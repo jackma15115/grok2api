@@ -374,6 +374,20 @@ export function SettingsPage() {
                     {...form.register("audit.retentionDays", { valueAsNumber: true })}
                   />
                 </SettingsField>
+                <SettingsField
+                  controlId="audit-retention-count"
+                  label={t("settings.audit.retentionCount")}
+                  description={t("settings.audit.retentionCountHelp")}
+                  error={form.formState.errors.audit?.retentionCount?.message}
+                >
+                  <Input
+                    id="audit-retention-count"
+                    type="number"
+                    min={-1}
+                    max={1_000_000_000}
+                    {...form.register("audit.retentionCount", { valueAsNumber: true })}
+                  />
+                </SettingsField>
 
               </div>
             </SettingsSection>

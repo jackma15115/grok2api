@@ -1112,3 +1112,80 @@ func (r *AuditRepository) PurgeOlderThan(ctx context.Context, cutoff time.Time) 
 		}
 	}
 }
+
+func (r *AuditRepository) PurgeExcess(ctx context.Context, keep int) (int64, error) {
+	if keep < 0 {
+		return 0, nil
+	}
+	var total int64
+	for {
+		var ids []uint64
+		var batchDeleted int64
+		err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			query := tx.Model(&requestAuditModel{}).Select("id").Order("created_at DESC, id DESC")
+			if keep > 0 {
+				query = query.Offset(keep)
+			}
+			if err := query.Limit(auditPurgeBatchSize).Pluck("id", &ids).Error; err != nil {
+				return err
+			}
+			if len(ids) == 0 {
+				return nil
+			}
+			if err := tx.Where("audit_id IN ?", ids).Delete(&requestAuditAttemptModel{}).Error; err != nil {
+				return err
+			}
+			res := tx.Where("id IN ?", ids).Delete(&requestAuditModel{})
+			if res.Error != nil {
+				return res.Error
+			}
+			batchDeleted = res.RowsAffected
+			return nil
+		})
+		if err != nil {
+			return total, err
+		}
+		total += batchDeleted
+		if len(ids) < auditPurgeBatchSize {
+			return total, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+	}
+}
+
+func (r *AuditRepository) PurgeAll(ctx context.Context) (int64, error) {
+	var total int64
+	for {
+		var ids []uint64
+		var batchDeleted int64
+		err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&requestAuditModel{}).Select("id").Order("id ASC").Limit(auditPurgeBatchSize).Pluck("id", &ids).Error; err != nil {
+				return err
+			}
+			if len(ids) == 0 {
+				return nil
+			}
+			if err := tx.Where("audit_id IN ?", ids).Delete(&requestAuditAttemptModel{}).Error; err != nil {
+				return err
+			}
+			res := tx.Where("id IN ?", ids).Delete(&requestAuditModel{})
+			if res.Error != nil {
+				return res.Error
+			}
+			batchDeleted = res.RowsAffected
+			return nil
+		})
+		if err != nil {
+			return total, err
+		}
+		total += batchDeleted
+		if len(ids) < auditPurgeBatchSize {
+			return total, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+	}
+}

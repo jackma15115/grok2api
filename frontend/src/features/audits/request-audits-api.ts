@@ -231,3 +231,7 @@ export function getRequestAuditSummary(input: Omit<AuditQuery, "cursor" | "pageS
 export function getRequestAudit(id: string, signal?: AbortSignal): Promise<AuditDetailDTO> {
   return apiRequest(`/api/admin/v1/request-audits/${id}`, { signal }, decodeAuditDetail);
 }
+
+export function purgeRequestAudits(): Promise<{ deleted: number }> {
+  return apiRequest("/api/admin/v1/request-audits", { method: "DELETE" }, createObjectDecoder<{ deleted: number }>("audit purge", { deleted: isNumber }));
+}

@@ -124,6 +124,8 @@ audit:
   commitDelay: 5ms
   # [按需修改] 自动清理超过该天数的请求审计与尝试诊断；0 表示永久保留。
   retentionDays: 7
+  # [按需修改] 自动保留最新的请求审计条数；-1 表示不限量。与 retentionDays 同时生效。
+  retentionCount: -1
   # [通常不要修改] enforce 会在异常持续超过宽限期后暂停新的推理请求；确认发生数据丢失时会立即暂停。
   ledgerMode: enforce # observe | enforce
   ledgerFailureThreshold: 1

@@ -28,9 +28,19 @@ func NewQualityGuardHandler(service *auditapp.Service, clientKeyID uint64) *Hand
 
 func (h *Handler) Register(router *gin.RouterGroup) {
 	router.GET("/request-audits", h.list)
+	router.DELETE("/request-audits", h.purgeAll)
 	router.GET("/request-audits/summary", h.summary)
 	router.GET("/request-audits/degrade-accounts", h.degradeAccounts)
 	router.GET("/request-audits/:id", h.get)
+}
+
+func (h *Handler) purgeAll(c *gin.Context) {
+	deleted, err := h.service.PurgeAll(c.Request.Context())
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "auditPurgeFailed", "清理请求审计记录失败")
+		return
+	}
+	response.Success(c, http.StatusOK, gin.H{"deleted": deleted})
 }
 
 // RegisterQualityGuard exposes only the audit cursor required by the sidecar.

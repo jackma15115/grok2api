@@ -2,7 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, ArrowDown, ArrowUp, BrainCircuit, CircleCheck, CircleDollarSign, CornerDownRight, Database, Globe2, Info, Minimize2, RefreshCw, Search, WholeWord, type LucideIcon } from "lucide-react";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -13,7 +15,7 @@ import { listClientKeys } from "@/features/client-keys/client-keys-api";
 import { listAccounts } from "@/features/accounts/accounts-api";
 import { RequestAuditDetailDialog } from "@/features/audits/request-audit-detail-dialog";
 import { buildAuditUsageView } from "@/features/audits/audit-usage";
-import { getRequestAudits, getRequestAuditSummary, type AuditBillingBreakdownDTO, type AuditBillingComponentDTO, type AuditDTO, type AuditPeriod } from "@/features/audits/request-audits-api";
+import { getRequestAudits, getRequestAuditSummary, purgeRequestAudits, type AuditBillingBreakdownDTO, type AuditBillingComponentDTO, type AuditDTO, type AuditPeriod } from "@/features/audits/request-audits-api";
 import { EmptyState, ErrorState, TableLoadingRow } from "@/shared/components/data-state";
 import { DataTableShell } from "@/shared/components/data-table-shell";
 import { DataTableFilters } from "@/shared/components/data-table-filters";
@@ -50,6 +52,8 @@ export function RequestAuditsPage() {
   const [sort, setSort] = useState<TableSort>({ field: "createdAt", order: "desc" });
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const [selectedAudit, setSelectedAudit] = useState<AuditDTO | null>(null);
+  const [purgeOpen, setPurgeOpen] = useState(false);
+  const [purging, setPurging] = useState(false);
   const forceSummaryRefresh = useRef(false);
   const debouncedSearch = useDebouncedValue(search);
   const debouncedKeyFilter = useDebouncedValue(keyFilter);
@@ -174,6 +178,20 @@ export function RequestAuditsPage() {
     });
   }
 
+  async function purgeAll(): Promise<void> {
+    setPurging(true);
+    try {
+      const result = await purgeRequestAudits();
+      setPurgeOpen(false);
+      toast.success(t("audits.clearAllSuccess", { count: result.deleted }));
+      refreshAll();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("apiErrors.auditPurgeFailed"));
+    } finally {
+      setPurging(false);
+    }
+  }
+
   const changeSort = useCallback((field: string, initialOrder: SortOrder): void => {
     setSort((current) => nextTableSort(current, field, initialOrder));
   }, []);
@@ -186,10 +204,24 @@ export function RequestAuditsPage() {
         actions={(
           <>
             <PeriodSelector value={periodDays} onChange={setPeriodDays} ariaLabel={t("audits.usageSummary")} />
-            <Button variant="secondary" size="sm" onClick={refreshAll} disabled={auditsQuery.isFetching || summaryQuery.isFetching || manualRefreshing}><RefreshCw className={manualRefreshing || auditsQuery.isFetching || summaryQuery.isFetching ? "animate-spin" : undefined} />{t("common.refresh")}</Button>
+            <Button variant="destructive" size="sm" onClick={() => setPurgeOpen(true)} disabled={purging || auditsQuery.isFetching || summaryQuery.isFetching}><Database />{t("audits.clearAll")}</Button>
+            <Button variant="secondary" size="sm" onClick={refreshAll} disabled={purging || auditsQuery.isFetching || summaryQuery.isFetching || manualRefreshing}><RefreshCw className={manualRefreshing || auditsQuery.isFetching || summaryQuery.isFetching ? "animate-spin" : undefined} />{t("common.refresh")}</Button>
           </>
         )}
       />
+
+      <AlertDialog open={purgeOpen} onOpenChange={(open) => { if (!purging) setPurgeOpen(open); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("audits.clearAllTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("audits.clearAllDescription")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={purging}>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction disabled={purging} onClick={(event) => { event.preventDefault(); void purgeAll(); }}>{purging ? <Spinner /> : null}{t("audits.clearAllConfirm")}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <section className="space-y-2" aria-label={t("audits.usageSummary")}>
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">

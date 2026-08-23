@@ -24,7 +24,7 @@ export type SettingsConfigDTO = {
     accountIsolatedConnections: boolean;
     segmentedSelector: { enabled: boolean; minCandidates: number; windowSize: number };
   };
-  audit: { bufferSize: number; batchSize: number; flushInterval: string; commitDelayMS: number; retentionDays?: number };
+  audit: { bufferSize: number; batchSize: number; flushInterval: string; commitDelayMS: number; retentionDays?: number; retentionCount?: number };
   clientKeyDefaults: { rpmLimit: number; maxConcurrent: number };
   accounts: {
     markBuildForbiddenReauth: boolean;
@@ -134,7 +134,7 @@ const settingsConfigValidator = hasShape({
   }),
   audit: hasShape({
     bufferSize: isNumber, batchSize: isNumber, flushInterval: isString, commitDelayMS: isOptional(isNumber),
-    retentionDays: isOptional(isNumber),
+    retentionDays: isOptional(isNumber), retentionCount: isOptional(isNumber),
   }),
   clientKeyDefaults: hasShape({ rpmLimit: isNumber, maxConcurrent: isNumber }),
   // Older backends may omit accounts; withSettingsDefaults supplies a safe local default.
@@ -178,6 +178,7 @@ function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDT
         ...snapshot.config.audit,
         commitDelayMS: snapshot.config.audit.commitDelayMS ?? 5,
         retentionDays: snapshot.config.audit.retentionDays ?? 7,
+        retentionCount: snapshot.config.audit.retentionCount ?? -1,
       },
       routing: {
         ...snapshot.config.routing,

@@ -487,6 +487,19 @@ func (s *Service) PurgeOutdated(ctx context.Context, retentionDays int) (int64, 
 	return s.audits.PurgeOlderThan(ctx, cutoff)
 }
 
+// PurgeExcess 保留最新的指定条数；keep 小于 0 表示不限制。
+func (s *Service) PurgeExcess(ctx context.Context, keep int) (int64, error) {
+	if keep < 0 {
+		return 0, nil
+	}
+	return s.audits.PurgeExcess(ctx, keep)
+}
+
+// PurgeAll 删除全部请求审计及其尝试诊断记录。
+func (s *Service) PurgeAll(ctx context.Context) (int64, error) {
+	return s.audits.PurgeAll(ctx)
+}
+
 // CursorResult 表示按递减 ID 游标读取的一页审计记录。
 type CursorResult struct {
 	Items      []auditdomain.Record

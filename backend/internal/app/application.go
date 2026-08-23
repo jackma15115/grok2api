@@ -603,11 +603,11 @@ func (a *Application) Run(ctx context.Context) error {
 	})
 	startBackground("audit_retention_cleanup", func(taskCtx context.Context) error {
 		a.runPeriodicTask(taskCtx, time.Hour, "audit_retention_cleanup", func(runCtx context.Context) error {
-			retentionDays := a.settings.Get().Config.Audit.RetentionDays
-			if retentionDays == 0 {
-				return nil
+			config := a.settings.Get().Config.Audit
+			if _, err := a.audits.PurgeOutdated(runCtx, config.RetentionDays); err != nil {
+				return err
 			}
-			_, err := a.audits.PurgeOutdated(runCtx, retentionDays)
+			_, err := a.audits.PurgeExcess(runCtx, config.RetentionCount)
 			return err
 		})
 		return nil

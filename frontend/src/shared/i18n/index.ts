@@ -874,6 +874,11 @@ const resources = {
       audits: {
         title: "请求审计",
         description: "成功请求仅记录元数据；失败请求保留经过脱敏和裁剪的诊断快照。",
+        clearAll: "清理全部日志",
+        clearAllTitle: "清理全部请求审计？",
+        clearAllDescription: "所有请求审计和失败诊断记录将被永久删除，且无法恢复。",
+        clearAllConfirm: "确认清理",
+        clearAllSuccess: "已清理 {{count}} 条日志",
         search: "搜索请求 ID、模型、客户端 IP 或出口节点",
         request: "请求",
         requestId: "请求 ID",
@@ -1036,6 +1041,8 @@ const resources = {
           retentionTitle: "日志保留策略",
           retentionDays: "日志保留天数",
           retentionDaysHelp: "自动清理超过指定天数的请求审计与上游失败诊断记录。设置为 0 表示永久保留，默认为 7 天。",
+          retentionCount: "最近日志条数",
+          retentionCountHelp: "自动保留最新的指定条数请求审计。设置为 -1 表示不限量。",
           performanceTitle: "写入缓冲与性能",
           bufferSize: "队列容量",
           bufferSizeHelp: "审计记录进入持久化前可在内存队列中等待的最大数量。",
@@ -1339,6 +1346,7 @@ const resources = {
         webNSFWEnableFailed: "开启 Grok Web NSFW 失败",
         adminUnauthorized: "管理员登录状态已失效，请重新登录",
         auditListFailed: "获取请求审计记录失败",
+        auditPurgeFailed: "清理请求审计记录失败",
         authImportFailed: "导入授权文件失败",
         billingBatchRefreshFailed: "批量同步额度失败",
         quotaBatchResetFailed: "批量重置额度状态失败",
@@ -1683,6 +1691,11 @@ const resources = {
       audits: {
         title: "Request audits",
         description: "Successful requests store metadata only. Failed requests retain a redacted and size-limited diagnostic snapshot.",
+        clearAll: "Clear all logs",
+        clearAllTitle: "Clear all request audits?",
+        clearAllDescription: "All request audits and failure diagnostics will be permanently deleted and cannot be recovered.",
+        clearAllConfirm: "Clear logs",
+        clearAllSuccess: "Cleared {{count}} logs",
         search: "Search request ID, model, client IP, or egress node",
         request: "Request",
         requestId: "Request ID",
@@ -2055,6 +2068,7 @@ const resources = {
         webNSFWEnableFailed: "Failed to enable Grok Web NSFW",
         adminUnauthorized: "Your admin session has expired. Sign in again.",
         auditListFailed: "Failed to load request audits",
+        auditPurgeFailed: "Failed to clear request audits",
         authImportFailed: "Failed to import the authorization file",
         quotaBatchResetFailed: "Failed to reset quota state in batch",
         quotaResetFailed: "Failed to reset quota state for all accounts",
@@ -2386,6 +2400,10 @@ Object.assign(resources["zh-CN"].translation.settings.web as unknown as Record<s
 Object.assign(resources.en.translation.settings.web as unknown as Record<string, string>, {
   clearanceModeHelp: "Maintain Clearance manually, refresh it proactively with FlareSolverr, or solve on demand only after an explicit upstream rejection.",
   clearanceOnDemand: "On demand",
+});
+Object.assign(resources.en.translation.settings.audit as unknown as Record<string, string>, {
+  retentionCount: "Recent log count",
+  retentionCountHelp: "Automatically keeps only the newest request audits up to this count. Set to -1 for unlimited.",
 });
 function readStoredLanguage(): string | null {
   if (typeof window === "undefined") return null;

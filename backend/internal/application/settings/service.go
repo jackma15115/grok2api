@@ -122,12 +122,14 @@ type SegmentedSelectorConfig struct {
 
 // AuditConfig 是管理接口使用的审计可编辑输入。
 type AuditConfig struct {
-	BufferSize            int
-	BatchSize             int
-	FlushInterval         string
-	CommitDelayMS         int
-	RetentionDays         int
-	RetentionDaysProvided bool
+	BufferSize             int
+	BatchSize              int
+	FlushInterval          string
+	CommitDelayMS          int
+	RetentionDays          int
+	RetentionDaysProvided  bool
+	RetentionCount         int
+	RetentionCountProvided bool
 }
 
 // ClientKeyDefaultsConfig 是管理接口使用的密钥默认限制输入。
@@ -413,9 +415,13 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 	if value.Audit.RetentionDays != nil {
 		retentionDays = *value.Audit.RetentionDays
 	}
+	retentionCount := base.Audit.RetentionCount
+	if value.Audit.RetentionCount != nil {
+		retentionCount = *value.Audit.RetentionCount
+	}
 	base.Audit = config.AuditConfig{
 		BufferSize: value.Audit.BufferSize, BatchSize: value.Audit.BatchSize, FlushInterval: config.Duration(value.Audit.FlushInterval),
-		CommitDelay: config.Duration(commitDelay), RetentionDays: retentionDays,
+		CommitDelay: config.Duration(commitDelay), RetentionDays: retentionDays, RetentionCount: retentionCount,
 		LedgerMode: base.Audit.LedgerMode, LedgerFailureThreshold: base.Audit.LedgerFailureThreshold,
 		LedgerUnhealthyGrace: base.Audit.LedgerUnhealthyGrace, LedgerQueueHighWatermarkPct: base.Audit.LedgerQueueHighWatermarkPct,
 	}
@@ -494,7 +500,8 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 		},
 		Audit: settingsdomain.AuditConfig{
 			BufferSize: value.Audit.BufferSize, BatchSize: value.Audit.BatchSize, FlushInterval: value.Audit.FlushInterval.Value(), CommitDelay: value.Audit.CommitDelay.Value(),
-			RetentionDays: intPointer(value.Audit.RetentionDays),
+			RetentionDays:  intPointer(value.Audit.RetentionDays),
+			RetentionCount: intPointer(value.Audit.RetentionCount),
 		},
 		ClientKeyDefaults: settingsdomain.ClientKeyDefaultsConfig{
 			RPMLimit: value.ClientKeyDefaults.RPMLimit, MaxConcurrent: value.ClientKeyDefaults.MaxConcurrent,
@@ -594,6 +601,9 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 	}
 	if input.Audit.RetentionDaysProvided {
 		next.Audit.RetentionDays = input.Audit.RetentionDays
+	}
+	if input.Audit.RetentionCountProvided {
+		next.Audit.RetentionCount = input.Audit.RetentionCount
 	}
 	next.ClientKeyDefaults.RPMLimit = input.ClientKeyDefaults.RPMLimit
 	next.ClientKeyDefaults.MaxConcurrent = input.ClientKeyDefaults.MaxConcurrent
@@ -735,6 +745,7 @@ func toEditable(cfg config.Config) EditableConfig {
 		Audit: AuditConfig{
 			BufferSize: cfg.Audit.BufferSize, BatchSize: cfg.Audit.BatchSize, FlushInterval: cfg.Audit.FlushInterval.String(), CommitDelayMS: int(cfg.Audit.CommitDelay.Value() / time.Millisecond),
 			RetentionDays: cfg.Audit.RetentionDays, RetentionDaysProvided: true,
+			RetentionCount: cfg.Audit.RetentionCount, RetentionCountProvided: true,
 		},
 		ClientKeyDefaults: ClientKeyDefaultsConfig{RPMLimit: cfg.ClientKeyDefaults.RPMLimit, MaxConcurrent: cfg.ClientKeyDefaults.MaxConcurrent},
 		Accounts: AccountsConfig{

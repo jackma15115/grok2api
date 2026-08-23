@@ -656,4 +656,43 @@ func TestAuditRepositoryPurgeOlderThanBatchesAuditsAndAttempts(t *testing.T) {
 	}
 }
 
+func TestAuditRepositoryPurgeExcessKeepsNewestAndPurgeAllCascades(t *testing.T) {
+	ctx := context.Background()
+	database, err := OpenSQLite(ctx, filepath.Join(t.TempDir(), "audit-purge-count.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repository := NewAuditRepository(database)
+	for index := 0; index < 4; index++ {
+		if err := repository.Create(ctx, audit.Record{
+			EventID: fmt.Sprintf("evt_audit_count_%d", index), RequestID: fmt.Sprintf("count-%d", index), ClientKeyID: 1,
+			ModelRouteID: 1, StatusCode: 200, CreatedAt: time.Date(2026, 1, 1+index, 0, 0, 0, 0, time.UTC),
+			Attempts: []audit.Attempt{{Number: 1, Source: audit.AttemptSourceCredential, Stage: "response"}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deleted, err := repository.PurgeExcess(ctx, 2)
+	if err != nil || deleted != 2 {
+		t.Fatalf("purge excess deleted = %d, err = %v", deleted, err)
+	}
+	if count := tableRowCount(t, database, "request_audits"); count != 2 {
+		t.Fatalf("remaining audits = %d, want 2", count)
+	}
+	if count := tableRowCount(t, database, "request_audit_attempts"); count != 2 {
+		t.Fatalf("remaining attempts = %d, want 2", count)
+	}
+	deleted, err = repository.PurgeAll(ctx)
+	if err != nil || deleted != 2 {
+		t.Fatalf("purge all deleted = %d, err = %v", deleted, err)
+	}
+	if count := tableRowCount(t, database, "request_audit_attempts"); count != 0 {
+		t.Fatalf("remaining attempts after purge all = %d", count)
+	}
+}
+
 func uint64Pointer(value uint64) *uint64 { return &value }

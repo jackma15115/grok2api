@@ -436,6 +436,27 @@ func TestValidateAuditRetentionDaysRange(t *testing.T) {
 	}
 }
 
+func TestValidateAuditRetentionCountRange(t *testing.T) {
+	for _, count := range []int{-2, 1_000_000_001} {
+		cfg := defaultConfig()
+		cfg.Secrets.JWTSecret = "12345678901234567890123456789012"
+		cfg.Secrets.CredentialEncryptionKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+		cfg.Audit.RetentionCount = count
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("audit retentionCount %d should be rejected", count)
+		}
+	}
+	for _, count := range []int{-1, 0, 1000} {
+		cfg := defaultConfig()
+		cfg.Secrets.JWTSecret = "12345678901234567890123456789012"
+		cfg.Secrets.CredentialEncryptionKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+		cfg.Audit.RetentionCount = count
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("audit retentionCount %d should be valid: %v", count, err)
+		}
+	}
+}
+
 func TestValidateRejectsInvalidAutoAssignShareConfig(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.Routing.AutoAssignMaxNodeShare = 0.03
