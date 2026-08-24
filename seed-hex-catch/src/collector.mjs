@@ -109,7 +109,7 @@ function materialCaptureScript() {
     globalThis.getComputedStyle = function (element, pseudoElement) {
       const style = originalComputedStyle(element, pseudoElement);
       try {
-        if (element?.tagName === 'DIV' && element.childElementCount === 0 && element.parentElement === document.body) {
+        if (element?.tagName === 'DIV' && element.childElementCount === 0) {
           const animation = element.getAnimations().find((item) => item.effect?.getComputedTiming()?.duration === 4096);
           if (animation) state.styles.push({ color: style.color, transform: style.transform });
         }
@@ -198,19 +198,23 @@ export class SVGMaterialCollector {
       const response = await page.goto(this.targetURL, { waitUntil: "domcontentloaded", timeout: this.browserTimeoutMs });
       await page.waitForTimeout(this.pageSettleMs);
       let captured = await page.evaluate(() => structuredClone(globalThis.__seedHexCatch));
-      let hexCandidates = captured.styles.flatMap((style) => {
-        try { return [computeStyleHEX(style.color, style.transform)]; } catch { return []; }
-      });
+      let hexCandidates = [];
       let extracted = null;
-      const mismatches = [];
-      for (const capture of observed.toReversed()) {
-        try {
-          extracted = extractMaterialFromCapture({ ...capture, digestInputs: captured.digestInputs, hexCandidates });
-          break;
-        } catch (_) {
-          mismatches.push(describeCaptureMismatch({ ...capture, digestInputs: captured.digestInputs, hexCandidates }));
+      const mismatches = new Set();
+      const tryExtract = () => {
+        hexCandidates = captured.styles.flatMap((style) => {
+          try { return [computeStyleHEX(style.color, style.transform)]; } catch { return []; }
+        });
+        for (const capture of observed.toReversed()) {
+          try {
+            return extractMaterialFromCapture({ ...capture, digestInputs: captured.digestInputs, hexCandidates });
+          } catch (_) {
+            mismatches.add(describeCaptureMismatch({ ...capture, digestInputs: captured.digestInputs, hexCandidates }));
+          }
         }
-      }
+        return null;
+      };
+      extracted = tryExtract();
       if (!extracted) {
         const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const probe = page.evaluate(async ({ path, method, nonce }) => {
@@ -223,13 +227,14 @@ export class SVGMaterialCollector {
           if (!["GET", "HEAD"].includes(method)) init.body = "{}";
           try { await fetch(path, init); } catch (_) {}
         }, { path: this.probePath, method: this.probeMethod, nonce });
-        const capture = await waitWithTimeout(probeCapture.promise, this.browserTimeoutMs);
+        await waitWithTimeout(probeCapture.promise, Math.min(this.browserTimeoutMs, 10_000));
         await probe;
-        captured = await page.evaluate(() => structuredClone(globalThis.__seedHexCatch));
-        hexCandidates = captured.styles.flatMap((style) => {
-          try { return [computeStyleHEX(style.color, style.transform)]; } catch { return []; }
-        });
-        if (capture) extracted = extractMaterialFromCapture({ ...capture, digestInputs: captured.digestInputs, hexCandidates });
+        const deadline = Date.now() + Math.min(this.browserTimeoutMs, 10_000);
+        while (!extracted && Date.now() < deadline) {
+          captured = await page.evaluate(() => structuredClone(globalThis.__seedHexCatch));
+          extracted = tryExtract();
+          if (!extracted) await page.waitForTimeout(100);
+        }
       }
       if (!extracted) {
         const status = response?.status();
@@ -237,7 +242,7 @@ export class SVGMaterialCollector {
         const detail = [status ? `initial HTTP ${status}` : "", title ? `title ${JSON.stringify(title)}` : ""]
           .filter(Boolean)
           .join(", ");
-        const mismatchDetail = mismatches.length ? `; ${mismatches.slice(0, 4).join("; ")}` : "";
+        const mismatchDetail = mismatches.size ? `; ${[...mismatches].slice(0, 4).join("; ")}` : "";
         throw new Error(`browser did not produce a matching x-statsig-id request${detail ? ` (${detail})` : ""}${mismatchDetail}`);
       }
       const { seed, hex } = extracted;
