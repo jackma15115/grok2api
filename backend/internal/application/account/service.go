@@ -85,7 +85,7 @@ const (
 	observedModelLocalCacheTTL                    = 5 * time.Second
 	observedModelLockShards                       = 64
 	maxCredentialExportAccounts                   = 10000
-	maxCredentialImportAccounts                   = 10000
+	maxCredentialImportAccounts                   = 15000
 	credentialImportChunkSize                     = 100
 	credentialImportPrepareWorkers                = 3
 	maxQuotaResetAccounts                         = 10000

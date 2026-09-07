@@ -146,6 +146,18 @@ func TestWriteServiceErrorUsesCredentialLimitCodes(t *testing.T) {
 	}
 }
 
+func TestImportErrorResponseDistinguishesInputAndLimitFailures(t *testing.T) {
+	if code, _ := importErrorResponse(fmt.Errorf("%w: too many", accountapp.ErrImportLimit)); code != "accountImportLimitExceeded" {
+		t.Fatalf("limit code = %q", code)
+	}
+	if code, _ := importErrorResponse(fmt.Errorf("%w: malformed", accountapp.ErrInvalidImport)); code != "invalidAuthFile" {
+		t.Fatalf("invalid import code = %q", code)
+	}
+	if code, message := importErrorResponse(errors.New("database unavailable")); code != "authImportFailed" || message == "" {
+		t.Fatalf("internal error response = %q, %q", code, message)
+	}
+}
+
 func TestLogQuotaRefreshFailureIncludesRequestContextAndCause(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var output bytes.Buffer

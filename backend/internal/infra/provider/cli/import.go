@@ -17,7 +17,7 @@ import (
 
 const (
 	credentialImportProvider     = "grok_build"
-	maxCredentialImportAccounts  = 10000
+	maxCredentialImportAccounts  = 15000
 	maxImportedRefreshTokenBytes = 16 << 10
 )
 
