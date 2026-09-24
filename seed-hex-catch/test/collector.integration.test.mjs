@@ -95,11 +95,11 @@ test("collects material from a browser Statsig probe", { skip: !executablePath }
 
 test("signs the fallback probe through Grok's current Turbopack runtime", { skip: !executablePath }, async () => {
   const runtimeHTML = `<!doctype html><title>Grok</title><script>
-globalThis.TURBOPACK = [];
 const seed = new Uint8Array(${JSON.stringify(seed)});
-globalThis.TURBOPACK.push = function(entry) {
-  if (Array.isArray(entry) && entry[1]?.runtimeModuleIds) {
-    entry[1].runtimeModuleIds.forEach((id) => entry[2]({ i: () => ({ botoxSign: async (path, method) => {
+const signerModuleID = 428991;
+const runtime = {
+  m: { [signerModuleID]: true },
+  i: (id) => Number(id) === signerModuleID ? { botoxSign: async (path, method) => {
     const number = Math.floor(Date.now() / 1000) - ${STATSIG_EPOCH};
     const input = method + '!' + path + '!' + number + 'obfiowerehiring' + ${JSON.stringify(hex)};
     const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input)));
@@ -116,9 +116,87 @@ globalThis.TURBOPACK.push = function(entry) {
     let binary = '';
     for (const value of output) binary += String.fromCharCode(value);
     return btoa(binary).replace(/=+$/g, '');
-    } })}));
-  }
+  } } : {},
 };
+const chunks = [];
+chunks.push = function(entry) {
+  if (Array.isArray(entry) && typeof entry[1] === 'number' && typeof entry[2] === 'function') entry[2](runtime);
+  return 1;
+};
+globalThis.TURBOPACK = chunks;
+globalThis.TURBOPACK.push([document.currentScript, 17, (activeRuntime) => activeRuntime.i(signerModuleID)]);
+</script>`;
+  const server = http.createServer((request, response) => {
+    if (request.url === "/v1" && request.method === "POST") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: "ok", solution: { userAgent: "Mozilla/5.0 Chrome/148.0.0.0 Safari/537.36", cookies: [] } }));
+      return;
+    }
+    if (request.url === "/") {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(runtimeHTML);
+      return;
+    }
+    response.writeHead(204);
+    response.end();
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const collector = new SVGMaterialCollector({
+      targetURL: `http://127.0.0.1:${server.address().port}/`,
+      flareSolverrURL: `http://127.0.0.1:${server.address().port}/`,
+      executablePath,
+      browserTimeoutMs: 5_000,
+      pageSettleMs: 25,
+    });
+    const material = await collector.refresh();
+    assert.equal(collector.status().lastError, null);
+    assert.equal(material.seed, seedBase64);
+    assert.equal(material.hex, hex);
+    assert.equal(material.capturedMethod, "POST");
+    assert.equal(material.capturedPath, "/rest/rate-limits");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("supports the legacy Turbopack descriptor and cached default export", { skip: !executablePath }, async () => {
+  const runtimeHTML = `<!doctype html><title>Grok</title><script>
+const seed = new Uint8Array(${JSON.stringify(seed)});
+const signerModuleID = 716205;
+const signer = async (path, method) => {
+  const number = Math.floor(Date.now() / 1000) - ${STATSIG_EPOCH};
+  const input = method + '!' + path + '!' + number + 'obfiowerehiring' + ${JSON.stringify(hex)};
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input)));
+  const key = 37;
+  const output = new Uint8Array(70);
+  output[0] = key;
+  for (let index = 0; index < 48; index++) output[index + 1] = seed[index] ^ key;
+  output[49] = number ^ key;
+  output[50] = (number >>> 8) ^ key;
+  output[51] = (number >>> 16) ^ key;
+  output[52] = (number >>> 24) ^ key;
+  for (let index = 0; index < 16; index++) output[index + 53] = digest[index] ^ key;
+  output[69] = 3 ^ key;
+  let binary = '';
+  for (const value of output) binary += String.fromCharCode(value);
+  return btoa(binary).replace(/=+$/g, '');
+};
+const runtime = {
+  c: new Map([[signerModuleID, { exports: { default: { botoxSign: signer } } }]]),
+  m: new Map(),
+  i: () => ({}),
+};
+const chunks = [];
+chunks.push = function(entry) {
+  if (Array.isArray(entry) && entry[1]?.runtimeModuleIds && typeof entry[2] === 'function') entry[2](runtime);
+  return 1;
+};
+globalThis.TURBOPACK = chunks;
+globalThis.TURBOPACK.push([document.currentScript, { otherChunks: [], runtimeModuleIds: [23] }, () => {}]);
 </script>`;
   const server = http.createServer((request, response) => {
     if (request.url === "/v1" && request.method === "POST") {

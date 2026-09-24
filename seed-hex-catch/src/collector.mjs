@@ -47,30 +47,161 @@ function cookiesFromSSO(value, targetURL) {
 
 function signedProbeScript() {
   return async ({ path, method, nonce }) => {
-    let signer;
+    let signer = globalThis.__seedHexBotoxSign;
+    let signerSource = signer ? globalThis.__seedHexBotoxSignSource || "observed-import" : "none";
+    const runtimes = [];
+    const rememberRuntime = (runtime) => {
+      if (runtime && !runtimes.includes(runtime)) runtimes.push(runtime);
+    };
+    const entries = (collection) => {
+      if (!collection) return [];
+      if (collection instanceof Map) return collection.entries();
+      return Object.entries(collection);
+    };
+    const exportedSigner = (module) => {
+      try {
+        const candidates = [module, module?.exports, module?.default, module?.exports?.default];
+        for (const candidate of candidates) {
+          if (typeof candidate?.botoxSign === "function") return candidate.botoxSign.bind(candidate);
+        }
+      } catch (_) {}
+      return null;
+    };
+    const findSigner = (runtime, source) => {
+      if (!runtime || typeof runtime.i !== "function") return;
+      rememberRuntime(runtime);
+      for (const [collectionName, collection] of [
+        ["cache", runtime.c],
+        ["module-cache", runtime.cache],
+      ]) {
+        for (const [id, module] of entries(collection)) {
+          const candidate = exportedSigner(module);
+          if (candidate) {
+            signer = candidate;
+            signerSource = `${source}:${collectionName}:${id}`;
+            return;
+          }
+        }
+      }
+      const moduleEntries = runtime.m instanceof Map ? runtime.m.entries() : Object.entries(runtime.m || {});
+      for (const [id, factory] of moduleEntries) {
+        let sourceText = "";
+        try { sourceText = Function.prototype.toString.call(factory); } catch (_) {}
+        if (!sourceText.includes("botoxSign")) continue;
+        try {
+          const module = runtime.i(id);
+          const candidate = exportedSigner(module);
+          if (candidate) {
+            signer = candidate;
+            signerSource = `${source}:modules:${id}`;
+            return;
+          }
+        } catch (_) {}
+      }
+    };
+    for (const runtime of globalThis.__seedHexTurbopackRuntimes || []) {
+      try { findSigner(runtime, "captured-runtime"); } catch (_) {}
+    }
+    try { findSigner(globalThis.__seedHexTurbopackRuntime, "captured-runtime"); } catch (_) {}
     try {
       const chunks = globalThis.TURBOPACK;
-      if (chunks && typeof chunks.push === "function") {
+      if (!signer && chunks && typeof chunks.push === "function") {
         const runtimeId = 990000001;
         const source = document.createElement("script");
-        chunks.push([source, { otherChunks: [], runtimeModuleIds: [runtimeId] }, (runtime) => {
-          try { signer = runtime.i(831076).botoxSign; } catch (_) {}
-        }]);
+        const receiveRuntime = (runtime) => findSigner(runtime, "injected-runtime");
+        try { chunks.push([source, runtimeId, receiveRuntime]); } catch (_) {}
+        if (!signer) {
+          try { chunks.push([source, { otherChunks: [], runtimeModuleIds: [runtimeId] }, receiveRuntime]); } catch (_) {}
+        }
         const deadline = Date.now() + 5000;
-        while (typeof signer !== "function" && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
+        while (typeof signer !== "function" && Date.now() < deadline) {
+          for (const runtime of runtimes) {
+            try { findSigner(runtime, "polled-runtime"); } catch (_) {}
+            if (signer) break;
+          }
+          if (!signer) await new Promise((resolve) => setTimeout(resolve, 25));
+        }
       }
     } catch (_) {}
     const headers = { "x-grok2api-statsig-probe": nonce };
-    if (typeof signer === "function") {
-      try { headers["x-statsig-id"] = await signer(path, method); } catch (_) {}
-    }
     const init = { method, credentials: "include", cache: "no-store", headers };
     if (!["GET", "HEAD"].includes(method)) init.body = "{}";
     let fetchError = "";
     let fetchStatus = null;
+    let signerError = "";
+    if (typeof signer === "function") {
+      try { headers["x-statsig-id"] = await signer(path, method); } catch (error) { signerError = String(error?.message || error); }
+    }
     try { fetchStatus = (await fetch(path, init)).status; } catch (error) { fetchError = String(error?.message || error); }
-    return { statsigID: headers["x-statsig-id"] || null, fetchError, fetchStatus };
+    return {
+      statsigID: headers["x-statsig-id"] || null,
+      fetchError,
+      fetchStatus,
+      signerError,
+      signerSource,
+      runtimeCount: runtimes.length,
+      moduleCount: runtimes.reduce((count, runtime) => count + (runtime?.m instanceof Map ? runtime.m.size : Reflect.ownKeys(runtime?.m || {}).length), 0),
+    };
   };
+}
+
+function runtimeCaptureScript() {
+  return `(() => {
+    let current;
+    const exportedSigner = (module) => {
+      try {
+        const candidates = [module, module?.exports, module?.default, module?.exports?.default];
+        for (const candidate of candidates) {
+          if (typeof candidate?.botoxSign === 'function') return candidate.botoxSign.bind(candidate);
+        }
+      } catch (_) {}
+      return null;
+    };
+    const rememberModule = (module, source) => {
+      const signer = exportedSigner(module);
+      if (!signer) return;
+      globalThis.__seedHexBotoxSign = signer;
+      globalThis.__seedHexBotoxSignSource = source;
+    };
+    const rememberRuntime = (runtime) => {
+      if (!runtime) return;
+      globalThis.__seedHexTurbopackRuntime = runtime;
+      const runtimes = globalThis.__seedHexTurbopackRuntimes ||= [];
+      if (!runtimes.includes(runtime)) runtimes.push(runtime);
+      for (const [collectionName, collection] of [['cache', runtime.c], ['module-cache', runtime.cache]]) {
+        const entries = collection instanceof Map ? collection.entries() : Object.entries(collection || {});
+        for (const [id, module] of entries) rememberModule(module, collectionName + ':' + String(id));
+      }
+      if (runtime.__seedHexImportWrapped || typeof runtime.i !== 'function') return;
+      const originalImport = runtime.i.bind(runtime);
+      const wrappedImport = function (id) {
+        const module = originalImport(id);
+        rememberModule(module, 'import:' + String(id));
+        return module;
+      };
+      try {
+        Object.assign(wrappedImport, runtime.i);
+        runtime.i = wrappedImport;
+        Object.defineProperty(runtime, '__seedHexImportWrapped', { value: true });
+      } catch (_) {}
+    };
+    Object.defineProperty(globalThis, 'TURBOPACK', { configurable: true, get: () => current, set: (value) => {
+      current = value;
+      if (!value || value.__seedHexWrapped || typeof value.push !== 'function') return;
+      const originalPush = value.push.bind(value);
+      value.push = function (entry) {
+        if (Array.isArray(entry) && typeof entry[2] === 'function') {
+          const callback = entry[2];
+          entry[2] = function (runtime) {
+            rememberRuntime(runtime);
+            return callback.apply(this, arguments);
+          };
+        }
+        return originalPush(entry);
+      };
+      Object.defineProperty(value, '__seedHexWrapped', { value: true });
+    }});
+  })();`;
 }
 
 function materialCaptureScript() {
@@ -212,6 +343,7 @@ export class SVGMaterialCollector {
       await context.exposeBinding("__seedHexReportDigest", async (_source, value) => {
         if (typeof value === "string" && value.length <= 4096 && value.includes(STATSIG_SALT)) digestInputs.push(value);
       });
+      await context.addInitScript({ content: runtimeCaptureScript() });
       await page.addInitScript({ content: materialCaptureScript() });
       const observed = [];
       const probeCapture = createDeferred();
@@ -277,7 +409,9 @@ export class SVGMaterialCollector {
         const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         activeProbeNonce = nonce;
         const probeResult = await page.evaluate(signedProbeScript(), { path: this.probePath, method: this.probeMethod, nonce });
-        probeSummary = probeResult?.statsigID ? "signer-returned-id" : `no-id status=${probeResult?.fetchStatus ?? "null"}${probeResult?.fetchError ? ` fetch=${probeResult.fetchError}` : ""}`;
+        probeSummary = probeResult?.statsigID
+          ? `signer-returned-id source=${probeResult.signerSource}`
+          : `no-id source=${probeResult?.signerSource ?? "none"} runtimes=${probeResult?.runtimeCount ?? 0} modules=${probeResult?.moduleCount ?? 0} status=${probeResult?.fetchStatus ?? "null"}${probeResult?.signerError ? ` signer=${probeResult.signerError}` : ""}${probeResult?.fetchError ? ` fetch=${probeResult.fetchError}` : ""}`;
         const observedProbe = await waitWithTimeout(probeCapture.promise, Math.min(this.browserTimeoutMs, 10_000));
         if (observedProbe?.statsigID || probeResult?.statsigID) {
           const capture = observedProbe ?? { statsigID: probeResult.statsigID, method: this.probeMethod, path: new URL(this.probePath, this.targetURL).pathname };
