@@ -34,57 +34,75 @@ function isCloudflareCookie(name) {
 
 export async function solveFlareSolverr({ baseURL, targetURL, proxyURL = "", timeoutMs = 60_000, fetchImpl = fetch }) {
   const endpoint = flareSolverrEndpoint(baseURL);
-  const payload = {
-    cmd: "request.get",
-    url: targetURL,
-    maxTimeout: timeoutMs,
-  };
-  if (proxyURL) payload.proxy = { url: proxyURL };
-
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs + 15_000);
-  let response;
+  const session = `grok2api-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  let sessionCreated = false;
   try {
-    response = await fetchImpl(endpoint, {
+    const call = async (payload) => fetchImpl(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
+    const createdResponse = await call({ cmd: "sessions.create", session });
+    const createdBody = await createdResponse.text();
+    if (!createdResponse.ok) throw new Error(`FlareSolverr returned HTTP ${createdResponse.status}`);
+    let created;
+    try {
+      created = JSON.parse(createdBody);
+    } catch {
+      throw new Error("FlareSolverr returned invalid JSON");
+    }
+    if (created?.status !== "ok") throw new Error("FlareSolverr could not create a browser session");
+    sessionCreated = true;
+
+    const payload = { cmd: "request.get", url: targetURL, maxTimeout: timeoutMs, session };
+    if (proxyURL) payload.proxy = { url: proxyURL };
+    const response = await call(payload);
+    const body = await response.text();
+    if (Buffer.byteLength(body) > MAX_RESPONSE_BYTES) throw new Error("FlareSolverr response is too large");
+    if (!response.ok) throw new Error(`FlareSolverr returned HTTP ${response.status}`);
+    let result;
+    try {
+      result = JSON.parse(body);
+    } catch {
+      throw new Error("FlareSolverr returned invalid JSON");
+    }
+    if (result?.status !== "ok") {
+      const message = sanitizeFlareSolverrMessage(result?.message) || "unknown error";
+      throw new Error(`FlareSolverr solve failed: ${message}`);
+    }
+    const userAgent = String(result?.solution?.userAgent ?? "").trim();
+    if (!userAgent || userAgent.length > 512 || /[\x00-\x1f\x7f]/.test(userAgent)) {
+      throw new Error("FlareSolverr returned an invalid User-Agent");
+    }
+    const cookieHeader = Array.isArray(result?.solution?.cookies)
+      ? result.solution.cookies.flatMap((cookie) => {
+        const name = String(cookie?.name ?? "").trim();
+        const value = String(cookie?.value ?? "").trim();
+        return name
+          && isCloudflareCookie(name)
+          && value
+          && value.length <= MAX_COOKIE_BYTES
+          && !/[\x00-\x1f\x7f]/.test(value)
+          && /^[\w!#$%&'*+.^`|~-]+$/.test(name)
+          ? [`${name.toLowerCase()}=${value}`]
+          : [];
+      }).join("; ")
+      : "";
+    if (!cookieHeader) throw new Error("FlareSolverr returned no usable cookies");
+    return { cookieHeader, userAgent };
   } finally {
     clearTimeout(timer);
+    if (sessionCreated) {
+      try {
+        await fetchImpl(endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ cmd: "sessions.destroy", session }),
+        });
+      } catch (_) {}
+    }
   }
-  const body = await response.text();
-  if (Buffer.byteLength(body) > MAX_RESPONSE_BYTES) throw new Error("FlareSolverr response is too large");
-  if (!response.ok) throw new Error(`FlareSolverr returned HTTP ${response.status}`);
-  let result;
-  try {
-    result = JSON.parse(body);
-  } catch {
-    throw new Error("FlareSolverr returned invalid JSON");
-  }
-  if (result?.status !== "ok") {
-    const message = sanitizeFlareSolverrMessage(result?.message) || "unknown error";
-    throw new Error(`FlareSolverr solve failed: ${message}`);
-  }
-  const userAgent = String(result?.solution?.userAgent ?? "").trim();
-  if (!userAgent || userAgent.length > 512 || /[\x00-\x1f\x7f]/.test(userAgent)) {
-    throw new Error("FlareSolverr returned an invalid User-Agent");
-  }
-  const cookieHeader = Array.isArray(result?.solution?.cookies)
-    ? result.solution.cookies.flatMap((cookie) => {
-      const name = String(cookie?.name ?? "").trim();
-      const value = String(cookie?.value ?? "").trim();
-      return name
-        && isCloudflareCookie(name)
-        && value
-        && value.length <= MAX_COOKIE_BYTES
-        && !/[\x00-\x1f\x7f]/.test(value)
-        && /^[\w!#$%&'*+.^`|~-]+$/.test(name)
-        ? [`${name.toLowerCase()}=${value}`]
-        : [];
-    }).join("; ")
-    : "";
-  if (!cookieHeader) throw new Error("FlareSolverr returned no usable cookies");
-  return { cookieHeader, userAgent };
 }

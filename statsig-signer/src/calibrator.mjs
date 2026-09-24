@@ -59,6 +59,70 @@ function createDeferred() {
   return { promise, resolve };
 }
 
+function signedProbe() {
+  return async ({ path, method, nonce }) => {
+    let signer;
+    try {
+      const runtime = globalThis.__grok2apiTurbopackRuntime;
+      const module = runtime?.i?.(831076);
+      if (typeof module?.botoxSign === "function") signer = module.botoxSign;
+    } catch (_) {}
+    try {
+      const chunks = globalThis.TURBOPACK;
+      if (!signer && chunks && typeof chunks.push === "function") {
+        const runtimeId = 990000001;
+        const source = document.createElement("script");
+        chunks.push([source, runtimeId, (runtime) => {
+          try { signer = runtime.i(831076).botoxSign; } catch (_) {}
+          if (typeof signer !== "function") {
+            for (const id of Object.keys(runtime.m || {})) {
+              try {
+                const module = runtime.i(id);
+                const candidate = module?.botoxSign ?? module?.default?.botoxSign;
+                if (typeof candidate === "function") { signer = candidate; break; }
+              } catch (_) {}
+            }
+          }
+        }]);
+        const deadline = Date.now() + 5000;
+        while (typeof signer !== "function" && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+      }
+    } catch (_) {}
+    const headers = { "x-grok2api-statsig-probe": nonce };
+    if (typeof signer === "function") {
+      try { headers["x-statsig-id"] = await signer(path, method); } catch (_) {}
+    }
+    const init = { method, credentials: "include", cache: "no-store", headers };
+    if (!["GET", "HEAD"].includes(method)) init.body = "{}";
+    try { await fetch(path, init); } catch (_) {}
+    return headers["x-statsig-id"] || null;
+  };
+}
+
+function runtimeCaptureScript() {
+  return `(() => {
+    let current;
+    Object.defineProperty(globalThis, "TURBOPACK", { configurable: true, get: () => current, set: (value) => {
+      current = value;
+      if (!value || value.__grok2apiWrapped) return;
+      const originalPush = value.push.bind(value);
+      value.push = function (entry) {
+        if (Array.isArray(entry) && typeof entry[2] === "function") {
+          const callback = entry[2];
+          entry[2] = function (runtime) {
+            globalThis.__grok2apiTurbopackRuntime = runtime;
+            return callback.apply(this, arguments);
+          };
+        }
+        return originalPush(entry);
+      };
+      Object.defineProperty(value, "__grok2apiWrapped", { value: true });
+    }});
+  })();`;
+}
+
 function optionalBoolean(value, name) {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (!normalized) return undefined;
@@ -148,6 +212,9 @@ export class BrowserCalibrator {
         if (typeof value === "string" && value.length <= 4096) digestInputs.push(value);
       });
       await context.addInitScript({
+        content: runtimeCaptureScript(),
+      });
+      await context.addInitScript({
         content: `(() => {
           const salt = ${JSON.stringify("obfiowerehiring")};
           const report = globalThis.__grok2apiReportStatsigDigest;
@@ -199,21 +266,30 @@ export class BrowserCalibrator {
       const page = await context.newPage();
       const observed = [];
       const probeCapture = createDeferred();
+      let activeProbeNonce = "";
+      const normalizeHeaders = (headers) => Object.fromEntries(Object.entries(headers ?? {}).map(([name, value]) => [name.toLowerCase(), value]));
+      const rememberRequest = (request, headers) => {
+        const normalized = normalizeHeaders(headers);
+        const statsigID = normalized["x-statsig-id"];
+        if (!statsigID) return;
+        try {
+          const capture = { statsigID, method: request.method(), path: new URL(request.url()).pathname };
+          observed.push(capture);
+          if (activeProbeNonce && normalized[PROBE_HEADER] === activeProbeNonce) probeCapture.resolve(capture);
+        } catch (_) {}
+      };
       page.on("request", async (request) => {
         try {
           const headers = await request.allHeaders();
-          const statsigID = headers["x-statsig-id"];
-          if (statsigID) observed.push({ statsigID, method: request.method(), path: new URL(request.url()).pathname });
+          rememberRequest(request, headers);
         } catch (_) {}
       });
       await context.route("**/*", async (route) => {
         const request = route.request();
         try {
-          const headers = await request.allHeaders();
+          const headers = normalizeHeaders(await request.allHeaders());
           if (headers[PROBE_HEADER]) {
-            if (headers["x-statsig-id"]) {
-              probeCapture.resolve({ statsigID: headers["x-statsig-id"], method: request.method(), path: new URL(request.url()).pathname });
-            }
+            rememberRequest(request, headers);
             await route.abort();
             return;
           }
@@ -231,18 +307,18 @@ export class BrowserCalibrator {
       }
       if (!material) {
         const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        const probe = page.evaluate(async ({ path, method, nonce }) => {
-          const init = { method, credentials: "include", cache: "no-store", headers: { "x-grok2api-statsig-probe": nonce } };
-          if (!["GET", "HEAD"].includes(method)) init.body = "{}";
-          try { await fetch(path, init); } catch (_) {}
-        }, { path: this.probePath, method: this.probeMethod, nonce });
-        const capture = await Promise.race([
-          probeCapture.promise,
-          delay(this.timeoutMs).then(() => null),
-        ]);
-        await probe;
-        await delay(100);
-        if (capture) material = extractMaterialFromCapture({ ...capture, digestInputs });
+        activeProbeNonce = nonce;
+        const directStatsigID = await page.evaluate(signedProbe(), { path: this.probePath, method: this.probeMethod, nonce });
+        const capture = directStatsigID
+          ? { statsigID: directStatsigID, method: this.probeMethod, path: new URL(this.probePath, this.targetURL).pathname }
+          : await Promise.race([probeCapture.promise, delay(Math.min(this.timeoutMs, 10_000)).then(() => null)]);
+        if (capture) {
+          const deadline = Date.now() + Math.min(this.timeoutMs, 5000);
+          while (!material && Date.now() < deadline) {
+            try { material = extractMaterialFromCapture({ ...capture, digestInputs }); } catch (_) {}
+            if (!material) await delay(50);
+          }
+        }
       }
       if (!material) {
         const status = response?.status();
