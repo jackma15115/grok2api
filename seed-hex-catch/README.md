@@ -78,6 +78,7 @@ a direct connection or have a trusted reverse proxy add authorization.
 | `CATCH_PROBE_PATH` | `/rest/rate-limits` | Same-origin fallback probe path |
 | `CATCH_PROBE_METHOD` | `POST` | Fallback probe method |
 | `CATCH_PROXY_URL` | empty | Shared HTTP(S)/SOCKS5 egress for FlareSolverr and Chromium |
+| `CATCH_SSO` | empty | Optional SSO token; injected as both `sso` and `sso-rw` cookies |
 | `CATCH_MAX_BODY_BYTES` | `65536` | Maximum `/sign` request body size |
 | `CATCH_API_TOKEN` | empty | Optional API Bearer token |
 

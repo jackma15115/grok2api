@@ -37,6 +37,42 @@ function parseProxy(value) {
   return proxy;
 }
 
+function cookiesFromSSO(value, targetURL) {
+  const sso = String(value ?? "").trim();
+  if (!sso) return [];
+  if (/[;\x00-\x1f\x7f]/.test(sso)) throw new Error("CATCH_SSO contains invalid characters");
+  const domain = new URL(targetURL).hostname;
+  return ["sso", "sso-rw"].map((name) => ({ name, value: sso, domain, path: "/" }));
+}
+
+function signedProbeScript() {
+  return async ({ path, method, nonce }) => {
+    let signer;
+    try {
+      const chunks = globalThis.TURBOPACK;
+      if (chunks && typeof chunks.push === "function") {
+        const runtimeId = 990000001;
+        const source = document.createElement("script");
+        chunks.push([source, { otherChunks: [], runtimeModuleIds: [runtimeId] }, (runtime) => {
+          try { signer = runtime.i(831076).botoxSign; } catch (_) {}
+        }]);
+        const deadline = Date.now() + 5000;
+        while (typeof signer !== "function" && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    } catch (_) {}
+    const headers = { "x-grok2api-statsig-probe": nonce };
+    if (typeof signer === "function") {
+      try { headers["x-statsig-id"] = await signer(path, method); } catch (_) {}
+    }
+    const init = { method, credentials: "include", cache: "no-store", headers };
+    if (!["GET", "HEAD"].includes(method)) init.body = "{}";
+    let fetchError = "";
+    let fetchStatus = null;
+    try { fetchStatus = (await fetch(path, init)).status; } catch (error) { fetchError = String(error?.message || error); }
+    return { statsigID: headers["x-statsig-id"] || null, fetchError, fetchStatus };
+  };
+}
+
 function materialCaptureScript() {
   return `(() => {
     globalThis.__seedHexCatch = { digestInputs: [], paths: [], selected: null, styles: [] };
@@ -66,8 +102,12 @@ function materialCaptureScript() {
     };
 
     const salt = ${JSON.stringify(STATSIG_SALT)};
+    const report = globalThis.__seedHexReportDigest;
     const rememberDigestInput = (value) => {
-      if (typeof value === 'string' && value.length <= 4096 && value.includes(salt)) state.digestInputs.push(value);
+      if (typeof value === 'string' && value.length <= 4096 && value.includes(salt)) {
+        state.digestInputs.push(value);
+        if (typeof report === 'function') Promise.resolve(report(value)).catch(() => {});
+      }
     };
     const textEncoderPrototype = globalThis.TextEncoder?.prototype;
     if (textEncoderPrototype) {
@@ -130,6 +170,7 @@ export class SVGMaterialCollector {
     this.probeMethod = options.probeMethod ?? process.env.CATCH_PROBE_METHOD ?? "POST";
     this.executablePath = options.executablePath ?? process.env.CATCH_BROWSER_EXECUTABLE_PATH ?? "";
     this.proxyURL = options.proxyURL ?? process.env.CATCH_PROXY_URL ?? "";
+    this.sso = options.sso ?? process.env.CATCH_SSO ?? "";
     this.headless = options.headless ?? process.env.CATCH_HEADLESS !== "false";
     this.material = null;
     this.refreshPromise = null;
@@ -165,30 +206,47 @@ export class SVGMaterialCollector {
         args: ["--disable-dev-shm-usage"],
       });
       context = await browser.newContext({ userAgent: clearance.userAgent, locale: "en-US" });
-      await context.addCookies(clearance.cookies);
+      await context.addCookies([...clearance.cookies, ...cookiesFromSSO(this.sso, this.targetURL)]);
       const page = await context.newPage();
+      const digestInputs = [];
+      await context.exposeBinding("__seedHexReportDigest", async (_source, value) => {
+        if (typeof value === "string" && value.length <= 4096 && value.includes(STATSIG_SALT)) digestInputs.push(value);
+      });
       await page.addInitScript({ content: materialCaptureScript() });
       const observed = [];
       const probeCapture = createDeferred();
+      let activeProbeNonce = "";
+      let probeSummary = "not-run";
+      const requestSummary = [];
+      const normalizeHeaders = (headers) => Object.fromEntries(Object.entries(headers ?? {}).map(([name, value]) => [name.toLowerCase(), value]));
+      const rememberRequest = (request, headers) => {
+        const normalized = normalizeHeaders(headers);
+        const statsigID = normalized["x-statsig-id"];
+        if (!statsigID) return;
+        try {
+          const capture = { statsigID, method: request.method(), path: new URL(request.url()).pathname };
+          observed.push(capture);
+          if (activeProbeNonce && normalized[PROBE_HEADER] === activeProbeNonce) probeCapture.resolve(capture);
+        } catch (_) {}
+      };
       page.on("request", async (request) => {
         try {
           const headers = await request.allHeaders();
-          const statsigID = headers["x-statsig-id"];
-          if (statsigID) observed.push({ statsigID, method: request.method(), path: new URL(request.url()).pathname });
+          if (requestSummary.length < 40) requestSummary.push(`${request.method()} ${new URL(request.url()).pathname} statsig=${Boolean(normalizeHeaders(headers)["x-statsig-id"])}`);
+          rememberRequest(request, headers);
         } catch (_) {}
+      });
+      page.on("request", (request) => {
+        if (requestSummary.length < 40 && !requestSummary.some((value) => value.startsWith(`${request.method()} ${new URL(request.url()).pathname} `))) {
+          requestSummary.push(`${request.method()} ${new URL(request.url()).pathname} event`);
+        }
       });
       await context.route("**/*", async (route) => {
         const request = route.request();
         try {
           const headers = await request.allHeaders();
-          if (headers[PROBE_HEADER]) {
-            if (headers["x-statsig-id"]) {
-              probeCapture.resolve({
-                statsigID: headers["x-statsig-id"],
-                method: request.method(),
-                path: new URL(request.url()).pathname,
-              });
-            }
+          if (normalizeHeaders(headers)[PROBE_HEADER]) {
+            rememberRequest(request, headers);
             await route.abort();
             return;
           }
@@ -207,9 +265,9 @@ export class SVGMaterialCollector {
         });
         for (const capture of observed.toReversed()) {
           try {
-            return extractMaterialFromCapture({ ...capture, digestInputs: captured.digestInputs, hexCandidates });
+            return extractMaterialFromCapture({ ...capture, digestInputs: [...captured.digestInputs, ...digestInputs], hexCandidates });
           } catch (_) {
-            mismatches.add(describeCaptureMismatch({ ...capture, digestInputs: captured.digestInputs, hexCandidates }));
+            mismatches.add(describeCaptureMismatch({ ...capture, digestInputs: [...captured.digestInputs, ...digestInputs], hexCandidates }));
           }
         }
         return null;
@@ -217,18 +275,24 @@ export class SVGMaterialCollector {
       extracted = tryExtract();
       if (!extracted) {
         const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        const probe = page.evaluate(async ({ path, method, nonce }) => {
-          const init = {
-            method,
-            credentials: "include",
-            cache: "no-store",
-            headers: { "x-grok2api-statsig-probe": nonce },
-          };
-          if (!["GET", "HEAD"].includes(method)) init.body = "{}";
-          try { await fetch(path, init); } catch (_) {}
-        }, { path: this.probePath, method: this.probeMethod, nonce });
-        await waitWithTimeout(probeCapture.promise, Math.min(this.browserTimeoutMs, 10_000));
-        await probe;
+        activeProbeNonce = nonce;
+        const probeResult = await page.evaluate(signedProbeScript(), { path: this.probePath, method: this.probeMethod, nonce });
+        probeSummary = probeResult?.statsigID ? "signer-returned-id" : `no-id status=${probeResult?.fetchStatus ?? "null"}${probeResult?.fetchError ? ` fetch=${probeResult.fetchError}` : ""}`;
+        const observedProbe = await waitWithTimeout(probeCapture.promise, Math.min(this.browserTimeoutMs, 10_000));
+        if (observedProbe?.statsigID || probeResult?.statsigID) {
+          const capture = observedProbe ?? { statsigID: probeResult.statsigID, method: this.probeMethod, path: new URL(this.probePath, this.targetURL).pathname };
+          captured = await page.evaluate(() => structuredClone(globalThis.__seedHexCatch));
+          hexCandidates = captured.styles.flatMap((style) => {
+            try { return [computeStyleHEX(style.color, style.transform)]; } catch { return []; }
+          });
+          try {
+            extracted = extractMaterialFromCapture({ ...capture, digestInputs: [...captured.digestInputs, ...digestInputs], hexCandidates });
+          } catch (_) {
+            mismatches.add(describeCaptureMismatch({ ...capture, digestInputs: [...captured.digestInputs, ...digestInputs], hexCandidates }));
+          }
+        } else if (probeResult?.error) {
+          mismatches.add(`probe failed: ${probeResult.error}`);
+        }
         const deadline = Date.now() + Math.min(this.browserTimeoutMs, 10_000);
         while (!extracted && Date.now() < deadline) {
           captured = await page.evaluate(() => structuredClone(globalThis.__seedHexCatch));
@@ -243,7 +307,7 @@ export class SVGMaterialCollector {
           .filter(Boolean)
           .join(", ");
         const mismatchDetail = mismatches.size ? `; ${[...mismatches].slice(0, 4).join("; ")}` : "";
-        throw new Error(`browser did not produce a matching x-statsig-id request${detail ? ` (${detail})` : ""}${mismatchDetail}`);
+        throw new Error(`browser did not produce a matching x-statsig-id request${detail ? ` (${detail})` : ""}${mismatchDetail}; probe=${probeSummary}; requests=${requestSummary.join(", ") || "none"}`);
       }
       const { seed, hex } = extracted;
       validateMaterial(seed, hex);

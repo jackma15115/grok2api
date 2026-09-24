@@ -22,8 +22,8 @@ const (
 	statsigMark              = 0x03
 	remoteStatsigMaterialTTL = 10 * time.Minute
 	localStatsigFallbackTTL  = time.Minute
-	localStatsigSeedBase64   = "AmawzIEMJXM6Sz8NetgNNGjfDmMzYpGmBm6M+MLKGfMtngNDlJnB7m+exx2Epiwc"
-	localStatsigHEX          = "4844a90fd70a3d70a3d701c28f5c28f5c2901c28f5c28f5c290fd70a3d70a3d700"
+	localStatsigSeedBase64   = "VFKBqGgx/W+xXZEVUJqgCYa6OjqRu9KT2NyOyjPvVt97bODA0wKrlZepwKvSh+VL"
+	localStatsigHEX          = "3afbd6100100"
 	localStatsigPrefixBase64 = ""
 	localStatsigDigestLength = 16
 	localStatsigHasMarker    = true

@@ -40,6 +40,8 @@ window.fetch = async function(input, init = {}) {
 </script>`;
 
 test("collects material from a browser Statsig probe", { skip: !executablePath }, async () => {
+  const testSSO = "test-sso-token";
+  let initialCookie = "";
   const server = http.createServer((request, response) => {
     if (request.url === "/v1" && request.method === "POST") {
       response.writeHead(200, { "content-type": "application/json" });
@@ -53,6 +55,7 @@ test("collects material from a browser Statsig probe", { skip: !executablePath }
       return;
     }
     if (request.url === "/") {
+      initialCookie = request.headers.cookie ?? "";
       response.writeHead(200, { "content-type": "text/html" });
       response.end(fixtureHTML);
       return;
@@ -72,6 +75,7 @@ test("collects material from a browser Statsig probe", { skip: !executablePath }
       executablePath,
       browserTimeoutMs: 10_000,
       pageSettleMs: 100,
+      sso: testSSO,
     });
     const material = await collector.refresh();
     assert.equal(collector.status().lastError, null);
@@ -80,6 +84,72 @@ test("collects material from a browser Statsig probe", { skip: !executablePath }
     assert.equal(material.digestLength, 16);
     assert.equal(material.hasMarker, true);
     assert.equal(material.prefix, "");
+    assert.equal(material.capturedMethod, "POST");
+    assert.equal(material.capturedPath, "/rest/rate-limits");
+    assert.match(initialCookie, /(?:^|; )sso=test-sso-token(?:;|$)/);
+    assert.match(initialCookie, /(?:^|; )sso-rw=test-sso-token(?:;|$)/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("signs the fallback probe through Grok's current Turbopack runtime", { skip: !executablePath }, async () => {
+  const runtimeHTML = `<!doctype html><title>Grok</title><script>
+globalThis.TURBOPACK = [];
+const seed = new Uint8Array(${JSON.stringify(seed)});
+globalThis.TURBOPACK.push = function(entry) {
+  if (Array.isArray(entry) && entry[1]?.runtimeModuleIds) {
+    entry[1].runtimeModuleIds.forEach((id) => entry[2]({ i: () => ({ botoxSign: async (path, method) => {
+    const number = Math.floor(Date.now() / 1000) - ${STATSIG_EPOCH};
+    const input = method + '!' + path + '!' + number + 'obfiowerehiring' + ${JSON.stringify(hex)};
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input)));
+    const key = 37;
+    const output = new Uint8Array(70);
+    output[0] = key;
+    for (let index = 0; index < 48; index++) output[index + 1] = seed[index] ^ key;
+    output[49] = number ^ key;
+    output[50] = (number >>> 8) ^ key;
+    output[51] = (number >>> 16) ^ key;
+    output[52] = (number >>> 24) ^ key;
+    for (let index = 0; index < 16; index++) output[index + 53] = digest[index] ^ key;
+    output[69] = 3 ^ key;
+    let binary = '';
+    for (const value of output) binary += String.fromCharCode(value);
+    return btoa(binary).replace(/=+$/g, '');
+    } })}));
+  }
+};
+</script>`;
+  const server = http.createServer((request, response) => {
+    if (request.url === "/v1" && request.method === "POST") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: "ok", solution: { userAgent: "Mozilla/5.0 Chrome/148.0.0.0 Safari/537.36", cookies: [] } }));
+      return;
+    }
+    if (request.url === "/") {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(runtimeHTML);
+      return;
+    }
+    response.writeHead(204);
+    response.end();
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const collector = new SVGMaterialCollector({
+      targetURL: `http://127.0.0.1:${server.address().port}/`,
+      flareSolverrURL: `http://127.0.0.1:${server.address().port}/`,
+      executablePath,
+      browserTimeoutMs: 5_000,
+      pageSettleMs: 25,
+    });
+    const material = await collector.refresh();
+    assert.equal(collector.status().lastError, null);
+    assert.equal(material.seed, seedBase64);
+    assert.equal(material.hex, hex);
     assert.equal(material.capturedMethod, "POST");
     assert.equal(material.capturedPath, "/rest/rate-limits");
   } finally {

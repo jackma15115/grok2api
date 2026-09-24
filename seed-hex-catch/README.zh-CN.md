@@ -71,6 +71,7 @@ http://seed-hex-catch:8789/material
 | `CATCH_PROBE_PATH` | `/rest/rate-limits` | 同源回退探针路径 |
 | `CATCH_PROBE_METHOD` | `POST` | 回退探针方法 |
 | `CATCH_PROXY_URL` | 空 | FlareSolverr 与 Chromium 共用的 HTTP(S)/SOCKS5 出口 |
+| `CATCH_SSO` | 空 | 可选的 SSO token；自动注入为 `sso` 和 `sso-rw` 两个 Cookie |
 | `CATCH_MAX_BODY_BYTES` | `65536` | `/sign` 请求体大小上限 |
 | `CATCH_API_TOKEN` | 空 | 可选的 API Bearer Token |
 
