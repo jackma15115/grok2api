@@ -304,6 +304,15 @@ type BuildConversionResult struct {
 	BuildAccountIDs []uint64
 }
 
+// BuildConversionOptions controls one Web→Build background conversion run.
+// Concurrency and jitter are scoped to that run; the shared conversion pool
+// still caps total maintenance traffic for the process.
+type BuildConversionOptions struct {
+	Concurrency int
+	Jitter      time.Duration
+	Retries     int
+}
+
 type ListFilter struct {
 	Provider  string
 	QuotaType string
@@ -1782,6 +1791,29 @@ func (s *Service) ConvertWebAccountsToBuildWithProgress(ctx context.Context, ids
 	return s.ConvertWebAccountsToBuildWithStrategy(ctx, ids, BuildConversionMissing, observer, progress)
 }
 
+func (s *Service) ConvertWebAccountsToBuildWithOptions(ctx context.Context, ids []uint64, strategy BuildConversionStrategy, options BuildConversionOptions, observer ImportedAccountObserver, progress BatchProgressObserver) (BuildConversionResult, error) {
+	options = normalizeBuildConversionOptions(options, s.conversionPool)
+	if strategy != BuildConversionAll && strategy != BuildConversionMissing {
+		return BuildConversionResult{}, invalidInput("Grok Web 到 Build 转换策略无效")
+	}
+	ids, err := normalizeIDs(ids, maxBuildConversionAccounts)
+	if err != nil {
+		return BuildConversionResult{}, err
+	}
+	prefilteredSkipped := 0
+	if strategy == BuildConversionMissing {
+		candidates, filterErr := s.accounts.FilterMissingBuildConversionIDs(ctx, ids)
+		if filterErr != nil {
+			return BuildConversionResult{}, mapRepositoryError(filterErr)
+		}
+		prefilteredSkipped = len(ids) - len(candidates)
+		ids = candidates
+	}
+	result, err := s.convertWebAccountsToBuildWithOptions(ctx, ids, strategy, options, observer, progress)
+	result.Skipped += prefilteredSkipped
+	return result, err
+}
+
 func (s *Service) ConvertWebAccountsToBuildWithStrategy(ctx context.Context, ids []uint64, strategy BuildConversionStrategy, observer ImportedAccountObserver, progress BatchProgressObserver) (BuildConversionResult, error) {
 	if strategy != BuildConversionAll && strategy != BuildConversionMissing {
 		return BuildConversionResult{}, invalidInput("Grok Web 到 Build 转换策略无效")
@@ -1818,7 +1850,43 @@ func (s *Service) ConvertAllWebAccountsToBuildWithProgress(ctx context.Context, 
 	return s.ConvertAllWebAccountsToBuildWithStrategy(ctx, BuildConversionMissing, observer, progress)
 }
 
+func (s *Service) ConvertAllWebAccountsToBuildWithOptions(ctx context.Context, strategy BuildConversionStrategy, options BuildConversionOptions, observer ImportedAccountObserver, progress BatchProgressObserver) (BuildConversionResult, error) {
+	options = normalizeBuildConversionOptions(options, s.conversionPool)
+	if strategy != BuildConversionAll && strategy != BuildConversionMissing {
+		return BuildConversionResult{}, invalidInput("Grok Web 到 Build 转换策略无效")
+	}
+	return s.convertAllWebAccountsToBuildWithOptions(ctx, strategy, options, observer, progress)
+}
+
 func (s *Service) ConvertAllWebAccountsToBuildWithStrategy(ctx context.Context, strategy BuildConversionStrategy, observer ImportedAccountObserver, progress BatchProgressObserver) (BuildConversionResult, error) {
+	return s.convertAllWebAccountsToBuildWithOptions(ctx, strategy, normalizeBuildConversionOptions(BuildConversionOptions{}, s.conversionPool), observer, progress)
+}
+
+func normalizeBuildConversionOptions(options BuildConversionOptions, shared *batch.Pool) BuildConversionOptions {
+	if options.Concurrency <= 0 {
+		if shared != nil && shared.Limit() > 0 {
+			options.Concurrency = shared.Limit()
+		} else {
+			options.Concurrency = 1
+		}
+	}
+	options.Concurrency = min(options.Concurrency, managedTaskWorkerCeiling)
+	if options.Jitter < 0 {
+		options.Jitter = 0
+	}
+	if options.Jitter > 30*time.Second {
+		options.Jitter = 30 * time.Second
+	}
+	if options.Retries < 0 {
+		options.Retries = 0
+	}
+	if options.Retries > 10 {
+		options.Retries = 10
+	}
+	return options
+}
+
+func (s *Service) convertAllWebAccountsToBuildWithOptions(ctx context.Context, strategy BuildConversionStrategy, options BuildConversionOptions, observer ImportedAccountObserver, progress BatchProgressObserver) (BuildConversionResult, error) {
 	if strategy != BuildConversionAll && strategy != BuildConversionMissing {
 		return BuildConversionResult{}, invalidInput("Grok Web 到 Build 转换策略无效")
 	}
@@ -1870,7 +1938,7 @@ func (s *Service) ConvertAllWebAccountsToBuildWithStrategy(ctx context.Context, 
 		if len(ids) == 0 {
 			return result, nil
 		}
-		current, err := s.convertWebAccountsToBuild(ctx, ids, strategy, batchObserver, offsetBatchProgress(progress, completed, total))
+		current, err := s.convertWebAccountsToBuildWithOptions(ctx, ids, strategy, options, batchObserver, offsetBatchProgress(progress, completed, total))
 		result.Created += current.Created
 		result.Linked += current.Linked
 		result.Skipped += current.Skipped
@@ -1906,6 +1974,10 @@ func offsetBatchProgress(progress BatchProgressObserver, offset, total int) Batc
 }
 
 func (s *Service) convertWebAccountsToBuild(ctx context.Context, ids []uint64, strategy BuildConversionStrategy, observer ImportedAccountObserver, progress BatchProgressObserver) (BuildConversionResult, error) {
+	return s.convertWebAccountsToBuildWithOptions(ctx, ids, strategy, normalizeBuildConversionOptions(BuildConversionOptions{}, s.conversionPool), observer, progress)
+}
+
+func (s *Service) convertWebAccountsToBuildWithOptions(ctx context.Context, ids []uint64, strategy BuildConversionStrategy, options BuildConversionOptions, observer ImportedAccountObserver, progress BatchProgressObserver) (BuildConversionResult, error) {
 	if progress != nil {
 		if err := progress(0, len(ids)); err != nil {
 			return BuildConversionResult{}, err
@@ -1924,8 +1996,29 @@ func (s *Service) convertWebAccountsToBuild(ctx context.Context, ids []uint64, s
 	completed := 0
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	results, summary, runErr := batch.MapObserved(runCtx, ids, batch.Options{Workers: s.conversionPool.Limit(), Pool: s.conversionPool}, func(workCtx context.Context, id uint64) (outcome, error) {
-		buildID, created, skipped, convertErr := s.convertWebAccountToBuild(workCtx, id, strategy)
+	taskPool := batch.NewChildPool(options.Concurrency, s.conversionPool)
+	taskPool.UpdateJitter(options.Jitter)
+	results, summary, runErr := batch.MapObserved(runCtx, ids, batch.Options{Workers: options.Concurrency, Pool: taskPool}, func(workCtx context.Context, id uint64) (outcome, error) {
+		var buildID uint64
+		var created, skipped bool
+		var convertErr error
+		for attempt := 0; attempt <= options.Retries; attempt++ {
+			buildID, created, skipped, convertErr = s.convertWebAccountToBuild(workCtx, id, strategy)
+			if convertErr == nil || errors.Is(convertErr, provider.ErrUnauthorized) || errors.Is(convertErr, ErrUnsupported) || attempt == options.Retries {
+				break
+			}
+			delay := provider.ErrorRetryAfter(convertErr)
+			if delay <= 0 {
+				delay = time.Duration(attempt+1) * 2 * time.Second
+			}
+			timer := time.NewTimer(min(delay, 2*time.Minute))
+			select {
+			case <-workCtx.Done():
+				timer.Stop()
+				return outcome{accountID: id, err: workCtx.Err()}, nil
+			case <-timer.C:
+			}
+		}
 		return outcome{accountID: id, buildID: buildID, created: created, skipped: skipped, err: convertErr}, nil
 	}, func(_ int, execution batch.Result[outcome]) {
 		observerMu.Lock()

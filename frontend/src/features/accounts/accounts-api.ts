@@ -368,8 +368,16 @@ export type BuildConversionStrategy = AccountSyncStrategy;
 export type WebConsoleSyncStrategy = AccountSyncStrategy;
 
 export type BuildConversionInput =
-  | { all: true; ids?: never; strategy?: BuildConversionStrategy }
-  | { all?: false; ids: string[]; strategy?: BuildConversionStrategy };
+  | { all: true; ids?: never; strategy?: BuildConversionStrategy; concurrency: number; jitterMs: number; retries: number }
+  | { all?: false; ids: string[]; strategy?: BuildConversionStrategy; concurrency: number; jitterMs: number; retries: number };
+
+export type BuildConversionTaskDTO = {
+  id: string;
+  status: "queued" | "running" | "canceling" | "completed" | "failed" | "canceled";
+  progress: AccountTaskProgressDTO;
+  result?: BuildConversionResultDTO;
+  error?: string;
+};
 
 export type WebConsoleSyncInput =
   | { all: true; ids?: never; strategy: WebConsoleSyncStrategy }
@@ -538,6 +546,30 @@ export function refreshAllConsoleAccountQuotas(onProgress?: (value: AccountTaskP
 
 export function convertWebAccountsToBuild(input: BuildConversionInput, onProgress?: (value: AccountTaskProgressDTO) => void, signal?: AbortSignal): Promise<BuildConversionResultDTO> {
   return runAccountTask("/api/admin/v1/accounts/web/convert-to-build", input, ["created", "linked", "skipped", "failed", "synced", "syncFailed"], { onProgress, signal, phases: conversionSyncPhases });
+}
+
+const decodeBuildConversionTask = createObjectDecoder<BuildConversionTaskDTO>("build conversion task", {
+  id: isString,
+  status: isOneOf("queued", "running", "canceling", "completed", "failed", "canceled"),
+  progress: hasShape({ completed: isNumber, total: isNumber, phase: isOptional(isOneOf("importing", "converting", "syncing")) }),
+  result: isOptional(hasShape({ created: isNumber, linked: isNumber, skipped: isNumber, failed: isNumber, synced: isNumber, syncFailed: isNumber })),
+  error: isOptional(isString),
+});
+
+export function startWebToBuildConversion(input: BuildConversionInput): Promise<BuildConversionTaskDTO> {
+  return apiRequest("/api/admin/v1/accounts/web/convert-to-build", { method: "POST", body: input }, decodeBuildConversionTask);
+}
+
+export function getWebToBuildConversionTask(id: string): Promise<BuildConversionTaskDTO> {
+  return apiRequest(`/api/admin/v1/accounts/web/convert-to-build/tasks/${encodeURIComponent(id)}`, {}, decodeBuildConversionTask);
+}
+
+export function getCurrentWebToBuildConversionTask(): Promise<BuildConversionTaskDTO> {
+  return apiRequest("/api/admin/v1/accounts/web/convert-to-build/tasks/current", {}, decodeBuildConversionTask);
+}
+
+export function cancelWebToBuildConversionTask(id: string): Promise<BuildConversionTaskDTO> {
+  return apiRequest(`/api/admin/v1/accounts/web/convert-to-build/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }, decodeBuildConversionTask);
 }
 
 export function syncWebAccountsToConsole(input: WebConsoleSyncInput, onProgress?: (value: AccountTaskProgressDTO) => void, signal?: AbortSignal): Promise<WebConsoleSyncResultDTO> {

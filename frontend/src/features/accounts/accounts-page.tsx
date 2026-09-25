@@ -37,13 +37,16 @@ import { nextTableSort, type SortOrder, type TableSort } from "@/shared/lib/tabl
 import {
   acceptWebAccountTerms,
   cleanupAccounts,
+  cancelWebToBuildConversionTask,
   clearAccountCooldown,
   deleteAccount,
   deleteAccounts,
   previewAccountDeletion,
   previewCleanup,
   enableWebAccountNSFW,
-  convertWebAccountsToBuild,
+  getWebToBuildConversionTask,
+  getCurrentWebToBuildConversionTask,
+  startWebToBuildConversion,
   detectBuildAccounts,
   exportAccountBatch,
   exportSelectedAccounts,
@@ -81,6 +84,7 @@ import {
   type AccountTaskProgressDTO,
   type BuildConversionInput,
   type BuildConversionStrategy,
+  type BuildConversionTaskDTO,
   type BuildDetectItemDTO,
   type WebConsoleSyncInput,
   type WebAccountScriptActions,
@@ -177,6 +181,10 @@ export function AccountsPage() {
   const [webConversionTarget, setWebConversionTarget] = useState<WebConversionTarget>("build");
   const [webConversionStrategy, setWebConversionStrategy] = useState<BuildConversionStrategy>("missing");
   const [conversionProgress, setConversionProgress] = useState<AccountTaskProgressDTO | null>(null);
+  const [conversionTask, setConversionTask] = useState<BuildConversionTaskDTO | null>(null);
+  const [conversionConcurrency, setConversionConcurrency] = useState("2");
+  const [conversionJitterMs, setConversionJitterMs] = useState("1000");
+  const [conversionRetries, setConversionRetries] = useState("2");
   const [webConsoleSyncProgress, setWebConsoleSyncProgress] = useState<AccountTaskProgressDTO | null>(null);
   const [webAccountScriptsTargets, setWebAccountScriptsTargets] = useState<string[] | "all" | null>(null);
   const [webAccountScriptsProgress, setWebAccountScriptsProgress] = useState<AccountTaskProgressDTO | null>(null);
@@ -320,6 +328,23 @@ export function AccountsPage() {
     void queryClient.invalidateQueries({ queryKey: ["accounts"] });
     void queryClient.invalidateQueries({ queryKey: ["accounts", "summary"] });
   }, [queryClient]);
+
+  const showError = useCallback((error: unknown): void => {
+    toast.error(error instanceof Error ? error.message : t("errors.generic"));
+  }, [t]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getCurrentWebToBuildConversionTask().then((task) => {
+      if (!cancelled) {
+        setConversionTask(task);
+        setConversionProgress(task.progress);
+      }
+    }).catch((error) => {
+      if (!cancelled && (!(error instanceof ApiError) || error.status !== 404)) showError(error);
+    });
+    return () => { cancelled = true; };
+  }, [showError]);
 
   const updateMutation = useMutation({
     mutationFn: (values: AccountForm) => {
@@ -605,26 +630,47 @@ export function AccountsPage() {
     onSettled: invalidateAccountData,
   });
   const conversionMutation = useMutation({
-    mutationFn: (input: BuildConversionInput) => {
-      const controller = new AbortController();
-      conversionAbortRef.current = controller;
-      setConversionProgress(null);
-      return convertWebAccountsToBuild(input, setConversionProgress, controller.signal);
-    },
-    onSuccess: (conversion) => {
-      setConversionProgress(null);
-      setWebConversionTargets(null);
-      clearSelection();
-      toast.success(t("accounts.conversionCompleted", conversion));
+    mutationFn: (input: BuildConversionInput) => startWebToBuildConversion(input),
+    onSuccess: (task) => {
+      setConversionTask(task);
+      setConversionProgress(task.progress);
     },
     onError: (error) => { if (!isAbortError(error)) showError(error); },
     onSettled: () => {
-      conversionAbortRef.current = null;
-      setConversionProgress(null);
       invalidateAccountData();
       void queryClient.invalidateQueries({ queryKey: ["models"] });
     },
   });
+
+  useEffect(() => {
+    const taskID = conversionTask?.id;
+    const taskStatus = conversionTask?.status;
+    if (!taskID || (taskStatus !== "queued" && taskStatus !== "running" && taskStatus !== "canceling")) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const next = await getWebToBuildConversionTask(taskID);
+        if (cancelled) return;
+        setConversionTask(next);
+        setConversionProgress(next.progress);
+        if (next.status === "completed" && next.result) {
+          setWebConversionTargets(null);
+          clearSelection();
+          toast.success(t("accounts.conversionCompleted", next.result));
+          invalidateAccountData();
+        } else if (next.status === "failed") {
+          toast.error(next.error ?? t("apiErrors.accountConversionFailed"));
+        } else if (next.status === "canceled") {
+          toast.info(t("accountConversion.canceled"));
+        }
+      } catch (error) {
+        if (!cancelled && !isAbortError(error)) showError(error);
+      }
+    };
+    const timer = window.setInterval(() => { void poll(); }, 1500);
+    void poll();
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [conversionTask?.id, conversionTask?.status, invalidateAccountData, showError, t]);
 
   const webConsoleSyncMutation = useMutation({
     mutationFn: (input: WebConsoleSyncInput) => {
@@ -1067,8 +1113,16 @@ export function AccountsPage() {
   }
 
   function openWebConversion(targets: string[] | "all"): void {
+    if (conversionRunning || conversionMutation.isPending) {
+      toast.error(t("apiErrors.accountConversionBusy"));
+      return;
+    }
     setWebConversionTarget("build");
     setWebConversionStrategy("missing");
+    setConversionTask(null);
+    setConversionConcurrency("2");
+    setConversionJitterMs("1000");
+    setConversionRetries("2");
     setWebConversionTargets(targets);
   }
 
@@ -1076,14 +1130,15 @@ export function AccountsPage() {
     conversionAbortRef.current?.abort();
     webConsoleSyncAbortRef.current?.abort();
     setWebConversionTargets(null);
+    if (!conversionTask || conversionTask.status === "completed" || conversionTask.status === "failed") setConversionTask(null);
   }
 
   function runWebConversion(): void {
     if (webConversionTargets === null) return;
     if (webConversionTarget === "build") {
       const input: BuildConversionInput = webConversionTargets === "all"
-        ? { all: true, strategy: webConversionStrategy }
-        : { ids: webConversionTargets, strategy: webConversionStrategy };
+        ? { all: true, strategy: webConversionStrategy, concurrency: Number(conversionConcurrency), jitterMs: Number(conversionJitterMs), retries: Number(conversionRetries) }
+        : { ids: webConversionTargets, strategy: webConversionStrategy, concurrency: Number(conversionConcurrency), jitterMs: Number(conversionJitterMs), retries: Number(conversionRetries) };
       conversionMutation.mutate(input);
       return;
     }
@@ -1130,10 +1185,16 @@ export function AccountsPage() {
     });
   }
 
-  const webConversionPending = conversionMutation.isPending || webConsoleSyncMutation.isPending;
+  const conversionRunning = conversionTask?.status === "queued" || conversionTask?.status === "running";
+  const conversionCanceling = conversionTask?.status === "canceling";
+  const webConversionPending = conversionMutation.isPending || conversionRunning || conversionCanceling || webConsoleSyncMutation.isPending;
 
-  function showError(error: unknown): void {
-    toast.error(error instanceof Error ? error.message : t("errors.generic"));
+  function cancelWebConversion(): void {
+    if (!conversionTask || !conversionRunning) return;
+    void cancelWebToBuildConversionTask(conversionTask.id).then((task) => {
+      setConversionTask(task);
+      setConversionProgress(task.progress);
+    }).catch(showError);
   }
 
   const result = accountsQuery.data;
@@ -1276,6 +1337,8 @@ export function AccountsPage() {
     || allQuotaResetMutation.isPending
     || allTokenMutation.isPending
     || conversionMutation.isPending
+    || conversionRunning
+    || conversionCanceling
     || webConsoleSyncMutation.isPending
     || importMutation.isPending
     || batchUpdateMutation.isPending
@@ -1300,6 +1363,12 @@ export function AccountsPage() {
         <h1 className="text-xl font-medium">{t("accounts.title")}</h1>
         <p className="sr-only">{t("console.accountsDescription")}</p>
       </header>
+      {conversionTask && (conversionRunning || conversionCanceling) ? (
+        <div className="flex items-center justify-between gap-3 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm dark:border-amber-700/60 dark:bg-amber-950/20">
+          <span>{t(`accountConversion.status.${conversionTask.status}`)}{conversionProgress ? ` · ${conversionProgress.completed} / ${conversionProgress.total}` : ""}</span>
+          {conversionRunning ? <Button type="button" size="sm" variant="destructive" onClick={cancelWebConversion}>{t("accountConversion.cancel")}</Button> : null}
+        </div>
+      ) : null}
       <section className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
         <AccountMetricPanel tone="text-quota-product-1" icon={<SquareTerminal />} loading={summaryLoading} label={t("accounts.buildAccountCount")} value={summaryUnavailable ? "-" : formatNumber(buildSummary.total, i18n.language, 0)} detail={t("accounts.routableAccountCount", { count: formatNumber(buildSummary.available, i18n.language, 0) })} />
         <AccountMetricPanel tone="text-quota-product-2" icon={<Compass />} loading={summaryLoading} label={t("accounts.webAccountCount")} value={summaryUnavailable ? "-" : formatNumber(webSummary.total, i18n.language, 0)} detail={t("accounts.routableAccountCount", { count: formatNumber(webSummary.available, i18n.language, 0) })} />
@@ -1531,7 +1600,7 @@ export function AccountsPage() {
                         <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="size-8" aria-label={t("common.actions")}><MoreHorizontal /></Button></DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => beginEdit(account)}><Pencil />{t("common.edit")}</DropdownMenuItem>
-                          {provider === "grok_web" ? <DropdownMenuItem onClick={() => openWebConversion([account.id])}><ArrowRight />{t("accountConversion.action")}</DropdownMenuItem> : null}
+                          {provider === "grok_web" ? <DropdownMenuItem disabled={bulkTaskPending} onClick={() => openWebConversion([account.id])}><ArrowRight />{t("accountConversion.action")}</DropdownMenuItem> : null}
                           {provider === "grok_web" ? (
                             <WebAccountSettingsMenu
                               account={account}
@@ -1722,7 +1791,23 @@ export function AccountsPage() {
               ? webConversionStrategy === "missing" ? "accountBulk.missingStrategyDescription" : "accountBulk.allStrategyDescription"
               : webConversionStrategy === "missing" ? "webConsoleSync.missingStrategyDescription" : "webConsoleSync.allStrategyDescription")}</p>
           </div>
+          {webConversionTarget === "build" ? <div className="grid gap-2 sm:grid-cols-3">
+            <div className="space-y-1">
+              <Label htmlFor="conversion-concurrency" className="text-xs">{t("accountConversion.concurrency")}</Label>
+              <Input id="conversion-concurrency" type="number" min={1} max={50} value={conversionConcurrency} disabled={webConversionPending} onChange={(event) => setConversionConcurrency(event.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="conversion-jitter" className="text-xs">{t("accountConversion.jitter")}</Label>
+              <Input id="conversion-jitter" type="number" min={0} max={30000} step={100} value={conversionJitterMs} disabled={webConversionPending} onChange={(event) => setConversionJitterMs(event.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="conversion-retries" className="text-xs">{t("accountConversion.retries")}</Label>
+              <Input id="conversion-retries" type="number" min={0} max={10} value={conversionRetries} disabled={webConversionPending} onChange={(event) => setConversionRetries(event.target.value)} />
+            </div>
+            {conversionTask ? <p className="sm:col-span-3 text-xs text-muted-foreground">{t(`accountConversion.status.${conversionTask.status}`)}{conversionProgress ? ` · ${conversionProgress.completed} / ${conversionProgress.total}` : ""}</p> : null}
+          </div> : null}
           <AlertDialogFooter>
+            {conversionRunning ? <Button type="button" variant="destructive" onClick={cancelWebConversion}>{t("accountConversion.cancel")}</Button> : null}
             <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
             <AlertDialogAction disabled={webConversionPending || webConversionTargets === null || (Array.isArray(webConversionTargets) && webConversionTargets.length === 0)} onClick={(event) => { event.preventDefault(); runWebConversion(); }}>
               {webConversionPending ? <><Spinner />{webConversionTarget === "build" && conversionProgress ? <span className="whitespace-nowrap tabular-nums">{t(conversionProgress.phase === "syncing" ? "accounts.syncingProgress" : "accounts.convertingProgress", conversionProgress)}</span> : webConversionTarget === "console" && webConsoleSyncProgress ? <span className="whitespace-nowrap tabular-nums">{t(webConsoleSyncProgress.phase === "syncing" ? "common.syncingProgress" : "common.importingProgress", webConsoleSyncProgress)}</span> : t("common.loading")}</> : t("accountConversion.start")}

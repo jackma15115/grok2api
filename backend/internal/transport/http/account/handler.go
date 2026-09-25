@@ -3,6 +3,7 @@ package account
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,9 +46,43 @@ const (
 )
 
 type Handler struct {
-	service *accountapp.Service
-	sync    accountSynchronizer
-	logger  *slog.Logger
+	service          *accountapp.Service
+	sync             accountSynchronizer
+	logger           *slog.Logger
+	conversionTaskMu sync.Mutex
+	conversionTask   *buildConversionTask
+}
+
+type buildConversionTask struct {
+	mu              sync.RWMutex
+	id              string
+	status          string
+	progress        accountTaskProgressResponse
+	result          *buildConversionResponse
+	error           string
+	cancel          context.CancelFunc
+	cancelRequested bool
+}
+
+func (t *buildConversionTask) snapshot() gin.H {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	value := gin.H{"id": t.id, "status": t.status, "progress": t.progress}
+	if t.result != nil {
+		value["result"] = t.result
+	}
+	if t.error != "" {
+		value["error"] = t.error
+	}
+	return value
+}
+
+func newBuildConversionTaskID() string {
+	var value [12]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return fmt.Sprintf("%x", value[:])
 }
 
 type accountSyncPipeline struct {
@@ -151,6 +186,9 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 	router.POST("/accounts/web/import", h.importWebAuth)
 	router.POST("/accounts/console/import", h.importConsoleAuth)
 	router.POST("/accounts/web/convert-to-build", h.convertWebToBuild)
+	router.GET("/accounts/web/convert-to-build/tasks/current", h.getCurrentWebToBuildConversionTask)
+	router.GET("/accounts/web/convert-to-build/tasks/:taskId", h.getWebToBuildConversionTask)
+	router.DELETE("/accounts/web/convert-to-build/tasks/:taskId", h.cancelWebToBuildConversionTask)
 	router.POST("/accounts/web/sync-to-console", h.syncWebToConsole)
 	router.POST("/accounts/web/run-scripts", h.runWebAccountScripts)
 	router.POST("/accounts/web/refresh-quotas", h.refreshAllWebQuotas)
@@ -225,9 +263,12 @@ type accountCleanupRequest struct {
 }
 
 type buildConversionRequest struct {
-	IDs      []string                           `json:"ids"`
-	All      bool                               `json:"all"`
-	Strategy accountapp.BuildConversionStrategy `json:"strategy"`
+	IDs         []string                           `json:"ids"`
+	All         bool                               `json:"all"`
+	Strategy    accountapp.BuildConversionStrategy `json:"strategy"`
+	Concurrency int                                `json:"concurrency"`
+	JitterMS    int                                `json:"jitterMs"`
+	Retries     int                                `json:"retries"`
 }
 
 // detectBuildAccountsRequest 要求显式选择全部账号或提供非空 id 集合。
@@ -869,7 +910,133 @@ func (h *Handler) convertWebToBuild(c *gin.Context) {
 			return
 		}
 	}
-	h.streamWebToBuildConversion(c, request.All, ids, request.Strategy)
+	if request.Concurrency < 1 || request.Concurrency > 50 || request.JitterMS < 0 || request.JitterMS > 30000 || request.Retries < 0 || request.Retries > 10 {
+		response.Error(c, http.StatusBadRequest, "invalidRequest", "并发必须为 1-50，抖动必须为 0-30000ms，重试次数必须为 0-10")
+		return
+	}
+	h.conversionTaskMu.Lock()
+	if h.conversionTask != nil {
+		h.conversionTask.mu.RLock()
+		active := h.conversionTask.status == "queued" || h.conversionTask.status == "running" || h.conversionTask.status == "canceling"
+		h.conversionTask.mu.RUnlock()
+		if active {
+			h.conversionTaskMu.Unlock()
+			response.Error(c, http.StatusConflict, "accountConversionBusy", "已有 Grok Web 到 Build 转换任务正在后台运行")
+			return
+		}
+	}
+	taskContext, cancel := context.WithCancel(context.Background())
+	task := &buildConversionTask{id: newBuildConversionTaskID(), status: "queued", cancel: cancel}
+	h.conversionTask = task
+	h.conversionTaskMu.Unlock()
+	response.Success(c, http.StatusAccepted, task.snapshot())
+	go h.runWebToBuildConversionTask(task, taskContext, request.All, ids, request.Strategy, accountapp.BuildConversionOptions{
+		Concurrency: request.Concurrency, Jitter: time.Duration(request.JitterMS) * time.Millisecond, Retries: request.Retries,
+	})
+}
+
+func (h *Handler) getCurrentWebToBuildConversionTask(c *gin.Context) {
+	h.conversionTaskMu.Lock()
+	task := h.conversionTask
+	h.conversionTaskMu.Unlock()
+	if task == nil {
+		response.Error(c, http.StatusNotFound, "notFound", "转换任务不存在")
+		return
+	}
+	response.Success(c, http.StatusOK, task.snapshot())
+}
+
+func (h *Handler) getWebToBuildConversionTask(c *gin.Context) {
+	h.conversionTaskMu.Lock()
+	task := h.conversionTask
+	h.conversionTaskMu.Unlock()
+	if task == nil || task.id != c.Param("taskId") {
+		response.Error(c, http.StatusNotFound, "notFound", "转换任务不存在")
+		return
+	}
+	response.Success(c, http.StatusOK, task.snapshot())
+}
+
+func (h *Handler) cancelWebToBuildConversionTask(c *gin.Context) {
+	h.conversionTaskMu.Lock()
+	task := h.conversionTask
+	h.conversionTaskMu.Unlock()
+	if task == nil || task.id != c.Param("taskId") {
+		response.Error(c, http.StatusNotFound, "notFound", "转换任务不存在")
+		return
+	}
+	task.mu.Lock()
+	if task.status != "queued" && task.status != "running" && task.status != "canceling" {
+		task.mu.Unlock()
+		response.Success(c, http.StatusOK, task.snapshot())
+		return
+	}
+	task.cancelRequested = true
+	task.status = "canceling"
+	cancel := task.cancel
+	task.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	response.Success(c, http.StatusAccepted, task.snapshot())
+}
+
+func (h *Handler) runWebToBuildConversionTask(task *buildConversionTask, ctx context.Context, all bool, ids []uint64, strategy accountapp.BuildConversionStrategy, options accountapp.BuildConversionOptions) {
+	task.mu.Lock()
+	if task.cancelRequested {
+		task.status = "canceled"
+		task.mu.Unlock()
+		if task.cancel != nil {
+			task.cancel()
+		}
+		return
+	}
+	task.status = "running"
+	task.mu.Unlock()
+	defer func() {
+		if task.cancel != nil {
+			task.cancel()
+		}
+	}()
+	progress := func(completed, total int) error {
+		task.mu.Lock()
+		task.progress = accountTaskProgressResponse{Completed: completed, Total: total, Phase: "converting"}
+		task.mu.Unlock()
+		return nil
+	}
+	syncProgress := func(completed, total int) {
+		task.mu.Lock()
+		task.progress = accountTaskProgressResponse{Completed: completed, Total: total, Phase: "syncing"}
+		task.mu.Unlock()
+	}
+	result, syncResult, err := h.runWebToBuildConversionWithOptions(ctx, all, ids, strategy, options, progress, syncProgress)
+	task.mu.Lock()
+	defer task.mu.Unlock()
+	if task.cancelRequested || errors.Is(err, context.Canceled) {
+		task.status = "canceled"
+		return
+	}
+	if err != nil {
+		task.status = "failed"
+		task.error = "Grok Web 账号转换失败"
+		return
+	}
+	task.status = "completed"
+	value := newBuildConversionResponse(result, syncResult)
+	task.result = &value
+}
+
+func (h *Handler) runWebToBuildConversionWithOptions(ctx context.Context, all bool, ids []uint64, strategy accountapp.BuildConversionStrategy, options accountapp.BuildConversionOptions, progress accountapp.BatchProgressObserver, syncProgress func(completed, total int)) (accountapp.BuildConversionResult, accountsyncapp.Result, error) {
+	pipeline := h.startSyncPipeline(ctx, syncProgress)
+	var result accountapp.BuildConversionResult
+	var err error
+	if all {
+		result, err = h.service.ConvertAllWebAccountsToBuildWithOptions(pipeline.ctx, strategy, options, pipeline.Observe, progress)
+	} else {
+		result, err = h.service.ConvertWebAccountsToBuildWithOptions(pipeline.ctx, ids, strategy, options, pipeline.Observe, progress)
+	}
+	syncResult := pipeline.Finish(err != nil)
+	return result, syncResult, err
 }
 
 func (h *Handler) syncWebToConsole(c *gin.Context) {
