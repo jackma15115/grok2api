@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
+	"golang.org/x/net/html"
 )
 
 const (
@@ -101,8 +103,6 @@ func (f *ssoBuildFlow) convert(ctx context.Context, credential accountdomain.Cre
 		device.ExpiresIn = 1800
 	}
 
-	// verify/approve 已在 auth.x.ai 完成状态变更。重定向目标只是结果页，
-	// 因此不访问 accounts.x.ai，直接解析首个 3xx Location 的状态路径。
 	status, finalURL, _, err := f.doWithFollow(ctx, http.MethodPost, ssoVerifyURL, url.Values{"user_code": {device.UserCode}}, false)
 	if err != nil {
 		return provider.CredentialSeed{}, err
@@ -119,9 +119,36 @@ func (f *ssoBuildFlow) convert(ctx context.Context, credential accountdomain.Cre
 		}
 		return provider.CredentialSeed{}, fmt.Errorf("SSO 自动验证 Device Flow 失败")
 	}
-	status, finalURL, _, err = f.doWithFollow(ctx, http.MethodPost, ssoApproveURL, url.Values{
-		"user_code": {device.UserCode}, "action": {"allow"}, "principal_type": {"User"}, "principal_id": {""},
-	}, false)
+
+	// xAI 的 consent 页面会签发一次性的 consent_token。不能根据 verify 的
+	// 重定向位置直接拼 approve 表单，否则 Cloudflare 会以请求无法验证拒绝。
+	status, consentURL, consentBody, err := f.do(ctx, http.MethodGet, finalURL, nil)
+	if err != nil {
+		return provider.CredentialSeed{}, err
+	}
+	if ssoDeviceRedirectState(consentURL) == "sign-in" || status == http.StatusUnauthorized {
+		return provider.CredentialSeed{}, provider.ErrUnauthorized
+	}
+	if status < 200 || status >= 300 {
+		return provider.CredentialSeed{}, fmt.Errorf("加载 xAI Device Flow 授权页失败: %w", conversionHTTPError{status: status})
+	}
+	approveURL, approveForm, err := parseSSOConsentForm(consentURL, consentBody, device.UserCode)
+	if err != nil {
+		return provider.CredentialSeed{}, err
+	}
+	consentOrigin, err := xaiURLOrigin(consentURL)
+	if err != nil {
+		return provider.CredentialSeed{}, err
+	}
+	status, finalURL, _, err = f.doWithFollowHeaders(ctx, http.MethodPost, approveURL, approveForm, false, http.Header{
+		"Accept":                    {"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+		"Origin":                    {consentOrigin},
+		"Referer":                   {consentURL},
+		"Sec-Fetch-Dest":            {"document"},
+		"Sec-Fetch-Mode":            {"navigate"},
+		"Sec-Fetch-Site":            {"same-site"},
+		"Upgrade-Insecure-Requests": {"1"},
+	})
 	if err != nil {
 		return provider.CredentialSeed{}, err
 	}
@@ -223,6 +250,10 @@ func (f *ssoBuildFlow) do(ctx context.Context, method, endpoint string, form url
 // doWithFollow 在 follow=false 时遇到 3xx 直接返回状态码与解析后的 Location 作为 finalURL，
 // 用于重定向目标域会被 Cloudflare 拦截（accounts.x.ai）的请求。
 func (f *ssoBuildFlow) doWithFollow(ctx context.Context, method, endpoint string, form url.Values, follow bool) (int, string, []byte, error) {
+	return f.doWithFollowHeaders(ctx, method, endpoint, form, follow, nil)
+}
+
+func (f *ssoBuildFlow) doWithFollowHeaders(ctx context.Context, method, endpoint string, form url.Values, follow bool, headers http.Header) (int, string, []byte, error) {
 	if !safeXAIURL(endpoint) {
 		return 0, "", nil, fmt.Errorf("xAI OAuth URL 不安全")
 	}
@@ -240,6 +271,12 @@ func (f *ssoBuildFlow) doWithFollow(ctx context.Context, method, endpoint string
 		}
 		request.Header.Set("Accept", "application/json, text/html;q=0.9, */*;q=0.8")
 		request.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+		for name, values := range headers {
+			request.Header.Del(name)
+			for _, value := range values {
+				request.Header.Add(name, value)
+			}
+		}
 		request.Header.Set("User-Agent", f.userAgent)
 		request.Header.Set("Cookie", f.cookieHeader())
 		if currentForm != nil {
@@ -283,6 +320,90 @@ func (f *ssoBuildFlow) doWithFollow(ctx context.Context, method, endpoint string
 		}
 	}
 	return 0, currentURL, nil, fmt.Errorf("xAI OAuth 重定向次数过多")
+}
+
+func parseSSOConsentForm(consentURL string, body []byte, userCode string) (string, url.Values, error) {
+	document, err := html.Parse(bytes.NewReader(body))
+	if err != nil {
+		return "", nil, fmt.Errorf("解析 xAI Device Flow 授权页: %w", err)
+	}
+	base, err := url.Parse(consentURL)
+	if err != nil || !safeXAIURL(consentURL) {
+		return "", nil, fmt.Errorf("xAI Device Flow 授权页 URL 不安全")
+	}
+	wanted, _ := url.Parse(ssoApproveURL)
+	var visit func(*html.Node) (string, url.Values, bool)
+	visit = func(node *html.Node) (string, url.Values, bool) {
+		if node.Type == html.ElementNode && node.Data == "form" {
+			method := strings.ToUpper(strings.TrimSpace(htmlAttribute(node, "method")))
+			if method == "" {
+				method = http.MethodGet
+			}
+			action := strings.TrimSpace(htmlAttribute(node, "action"))
+			parsedAction, parseErr := url.Parse(action)
+			if parseErr == nil {
+				resolved := base.ResolveReference(parsedAction)
+				if method == http.MethodPost && safeXAIURL(resolved.String()) && sameOAuthEndpoint(resolved, wanted) {
+					values := url.Values{}
+					collectSSOConsentInputs(node, values)
+					if strings.TrimSpace(values.Get("consent_token")) != "" {
+						values.Set("user_code", userCode)
+						values.Set("action", "allow")
+						if values.Get("principal_type") == "" {
+							values.Set("principal_type", "User")
+						}
+						return resolved.String(), values, true
+					}
+				}
+			}
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			if action, values, ok := visit(child); ok {
+				return action, values, true
+			}
+		}
+		return "", nil, false
+	}
+	action, values, found := visit(document)
+	if !found {
+		return "", nil, fmt.Errorf("xAI Device Flow 授权页缺少有效 consent_token")
+	}
+	return action, values, nil
+}
+
+func collectSSOConsentInputs(node *html.Node, values url.Values) {
+	if node.Type == html.ElementNode && node.Data == "input" {
+		name := strings.TrimSpace(htmlAttribute(node, "name"))
+		switch name {
+		case "consent_token", "principal_id", "principal_type", "user_code", "action":
+			values.Set(name, htmlAttribute(node, "value"))
+		}
+	}
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		collectSSOConsentInputs(child, values)
+	}
+}
+
+func htmlAttribute(node *html.Node, name string) string {
+	for _, attribute := range node.Attr {
+		if strings.EqualFold(attribute.Key, name) {
+			return attribute.Val
+		}
+	}
+	return ""
+}
+
+func sameOAuthEndpoint(actual, wanted *url.URL) bool {
+	return actual != nil && wanted != nil && strings.EqualFold(actual.Scheme, wanted.Scheme) &&
+		strings.EqualFold(actual.Host, wanted.Host) && actual.EscapedPath() == wanted.EscapedPath() && actual.RawQuery == ""
+}
+
+func xaiURLOrigin(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil || !safeXAIURL(raw) {
+		return "", fmt.Errorf("xAI OAuth 来源 URL 不安全")
+	}
+	return parsed.Scheme + "://" + parsed.Host, nil
 }
 
 func (f *ssoBuildFlow) captureCookies(response *http.Response) {

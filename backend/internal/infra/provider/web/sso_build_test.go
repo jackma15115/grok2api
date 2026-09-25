@@ -69,11 +69,13 @@ func TestSSOBuildFlowMapsDeadSSOToUnauthorized(t *testing.T) {
 	}
 }
 
-func TestSSOBuildFlowUsesAuthEndpointsOnly(t *testing.T) {
+func TestSSOBuildFlowLoadsConsentFormBeforeApproval(t *testing.T) {
 	client := &scriptedSSOClient{responses: []*http.Response{
 		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(
 			`{"device_code":"dc","user_code":"uc","interval":1,"expires_in":1800}`))},
 		{StatusCode: http.StatusSeeOther, Header: http.Header{"Location": []string{"https://accounts.x.ai/oauth2/device/consent"}}, Body: io.NopCloser(strings.NewReader(""))},
+		{StatusCode: http.StatusOK, Header: http.Header{"Set-Cookie": []string{"consent_session=session; Path=/; Secure"}}, Body: io.NopCloser(strings.NewReader(
+			`<!doctype html><form method="post" action="https://auth.x.ai/oauth2/device/approve"><input type="hidden" name="consent_token" value="signed-consent"><input type="hidden" name="user_code" value="stale"><input type="hidden" name="principal_type" value="User"><input type="hidden" name="principal_id" value="principal"><input type="hidden" name="access_token" value="must-not-leak"></form>`))},
 		{StatusCode: http.StatusSeeOther, Header: http.Header{"Location": []string{"https://accounts.x.ai/oauth2/device/done"}}, Body: io.NopCloser(strings.NewReader(""))},
 		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(
 			`{"access_token":"access","refresh_token":"refresh","expires_in":3600}`))},
@@ -83,13 +85,54 @@ func TestSSOBuildFlowUsesAuthEndpointsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if seed.AccessToken != "access" || seed.RefreshToken != "refresh" || len(client.requests) != 4 {
+	if seed.AccessToken != "access" || seed.RefreshToken != "refresh" || len(client.requests) != 5 {
 		t.Fatalf("seed=%#v requests=%d", seed, len(client.requests))
 	}
-	for _, request := range client.requests {
-		if request.URL.Hostname() != "auth.x.ai" {
-			t.Fatalf("device flow visited unexpected host %q", request.URL.Hostname())
-		}
+	if request := client.requests[2]; request.Method != http.MethodGet || request.URL.String() != "https://accounts.x.ai/oauth2/device/consent" {
+		t.Fatalf("consent request = %s %s", request.Method, request.URL)
+	}
+	approve := client.requests[3]
+	if approve.Method != http.MethodPost || approve.URL.String() != ssoApproveURL {
+		t.Fatalf("approve request = %s %s", approve.Method, approve.URL)
+	}
+	body, err := io.ReadAll(approve.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := url.ParseQuery(string(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values.Get("consent_token") != "signed-consent" || values.Get("user_code") != "uc" || values.Get("action") != "allow" || values.Get("principal_id") != "principal" {
+		t.Fatalf("approve form = %#v", values)
+	}
+	if values.Get("access_token") != "" {
+		t.Fatalf("untrusted field leaked into approve form: %#v", values)
+	}
+	if approve.Header.Get("Origin") != "https://accounts.x.ai" || approve.Header.Get("Referer") != "https://accounts.x.ai/oauth2/device/consent" {
+		t.Fatalf("approve navigation headers = %#v", approve.Header)
+	}
+	if cookie := approve.Header.Get("Cookie"); !strings.Contains(cookie, "consent_session=session") {
+		t.Fatalf("approve cookie = %q", cookie)
+	}
+}
+
+func TestParseSSOConsentFormRejectsMissingOrUntrustedTokenForm(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "missing token", body: `<form method="post" action="https://auth.x.ai/oauth2/device/approve"><input name="user_code" value="uc"></form>`},
+		{name: "wrong endpoint", body: `<form method="post" action="https://auth.x.ai/oauth2/token"><input name="consent_token" value="signed"></form>`},
+		{name: "untrusted host", body: `<form method="post" action="https://example.com/oauth2/device/approve"><input name="consent_token" value="signed"></form>`},
+		{name: "get method", body: `<form method="get" action="https://auth.x.ai/oauth2/device/approve"><input name="consent_token" value="signed"></form>`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, _, err := parseSSOConsentForm("https://accounts.x.ai/oauth2/device/consent?user_code=uc", []byte(test.body), "uc"); err == nil {
+				t.Fatal("invalid consent form accepted")
+			}
+		})
 	}
 }
 
