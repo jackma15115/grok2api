@@ -1991,94 +1991,89 @@ func (s *Service) convertWebAccountsToBuildWithOptions(ctx context.Context, ids 
 		err       error
 	}
 	var observed sync.Map
-	var observerMu sync.Mutex
-	var observerErr error
+	result := BuildConversionResult{BuildAccountIDs: make([]uint64, 0, len(ids))}
+	seen := make(map[uint64]struct{}, len(ids))
 	completed := 0
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	taskPool := batch.NewChildPool(options.Concurrency, s.conversionPool)
 	taskPool.UpdateJitter(options.Jitter)
-	results, summary, runErr := batch.MapObserved(runCtx, ids, batch.Options{Workers: options.Concurrency, Pool: taskPool}, func(workCtx context.Context, id uint64) (outcome, error) {
-		var buildID uint64
-		var created, skipped bool
-		var convertErr error
-		for attempt := 0; attempt <= options.Retries; attempt++ {
-			buildID, created, skipped, convertErr = s.convertWebAccountToBuild(workCtx, id, strategy)
-			if convertErr == nil || errors.Is(convertErr, provider.ErrUnauthorized) || errors.Is(convertErr, ErrUnsupported) || attempt == options.Retries {
-				break
+	pending := append([]uint64(nil), ids...)
+	for round := 0; len(pending) > 0 && round <= options.Retries; round++ {
+		roundIDs := pending
+		results, summary, runErr := batch.MapObserved(runCtx, roundIDs, batch.Options{Workers: options.Concurrency, Pool: taskPool}, func(workCtx context.Context, id uint64) (outcome, error) {
+			buildID, created, skipped, convertErr := s.convertWebAccountToBuild(workCtx, id, strategy)
+			return outcome{accountID: id, buildID: buildID, created: created, skipped: skipped, err: convertErr}, nil
+		}, nil)
+		s.logBatchSummary("web_to_build", taskPool, summary, runErr)
+		next := make([]uint64, 0, len(roundIDs))
+		maxRetryDelay := time.Duration(0)
+		for index, execution := range results {
+			if !execution.Completed {
+				continue
 			}
-			delay := provider.ErrorRetryAfter(convertErr)
-			if delay <= 0 {
-				delay = time.Duration(attempt+1) * 2 * time.Second
+			item := execution.Value
+			if execution.Err != nil {
+				item.accountID = roundIDs[index]
+				item.err = execution.Err
 			}
-			timer := time.NewTimer(min(delay, 2*time.Minute))
+			if item.err != nil {
+				retryable := round < options.Retries && !errors.Is(item.err, provider.ErrUnauthorized) && !errors.Is(item.err, ErrUnsupported) && !errors.Is(item.err, context.Canceled)
+				if retryable {
+					next = append(next, item.accountID)
+					delay := provider.ErrorRetryAfter(item.err)
+					if delay <= 0 {
+						delay = time.Duration(round+1) * 2 * time.Second
+					}
+					maxRetryDelay = max(maxRetryDelay, min(delay, 2*time.Minute))
+					continue
+				}
+				result.Failed++
+				s.logger.Warn("web_account_build_conversion_failed", "account_id", item.accountID, "error", item.err)
+				completed++
+			} else if item.skipped {
+				result.Skipped++
+				completed++
+			} else {
+				if item.created {
+					result.Created++
+				} else {
+					result.Linked++
+				}
+				if _, ok := seen[item.buildID]; !ok {
+					seen[item.buildID] = struct{}{}
+					result.BuildAccountIDs = append(result.BuildAccountIDs, item.buildID)
+				}
+				if observer != nil {
+					if _, loaded := observed.LoadOrStore(item.buildID, struct{}{}); !loaded {
+						if err := observer(item.buildID); err != nil {
+							cancel()
+							return result, err
+						}
+					}
+				}
+				completed++
+			}
+			if progress != nil {
+				if err := progress(completed, len(ids)); err != nil {
+					cancel()
+					return result, err
+				}
+			}
+		}
+		if runErr != nil {
+			return result, runErr
+		}
+		pending = next
+		if len(pending) > 0 && maxRetryDelay > 0 {
+			timer := time.NewTimer(maxRetryDelay)
 			select {
-			case <-workCtx.Done():
+			case <-runCtx.Done():
 				timer.Stop()
-				return outcome{accountID: id, err: workCtx.Err()}, nil
+				return result, runCtx.Err()
 			case <-timer.C:
 			}
 		}
-		return outcome{accountID: id, buildID: buildID, created: created, skipped: skipped, err: convertErr}, nil
-	}, func(_ int, execution batch.Result[outcome]) {
-		observerMu.Lock()
-		defer observerMu.Unlock()
-		defer func() {
-			completed++
-			if progress != nil {
-				if err := progress(completed, len(ids)); err != nil && observerErr == nil {
-					observerErr = err
-					cancel()
-				}
-			}
-		}()
-		item := execution.Value
-		if execution.Err != nil || item.err != nil || item.skipped || observer == nil {
-			return
-		}
-		if _, loaded := observed.LoadOrStore(item.buildID, struct{}{}); loaded {
-			return
-		}
-		if err := observer(item.buildID); err != nil {
-			if observerErr == nil {
-				observerErr = err
-				cancel()
-			}
-		}
-	})
-	s.logBatchSummary("web_to_build", s.conversionPool, summary, runErr)
-	result := BuildConversionResult{BuildAccountIDs: make([]uint64, 0, len(ids))}
-	seen := make(map[uint64]struct{}, len(ids))
-	for index, execution := range results {
-		item := execution.Value
-		if execution.Err != nil {
-			item.accountID = ids[index]
-			item.err = execution.Err
-		}
-		if item.err != nil {
-			result.Failed++
-			s.logger.Warn("web_account_build_conversion_failed", "account_id", item.accountID, "error", item.err)
-			continue
-		}
-		if item.skipped {
-			result.Skipped++
-			continue
-		}
-		if item.created {
-			result.Created++
-		} else {
-			result.Linked++
-		}
-		if _, ok := seen[item.buildID]; !ok {
-			seen[item.buildID] = struct{}{}
-			result.BuildAccountIDs = append(result.BuildAccountIDs, item.buildID)
-		}
-	}
-	if runErr != nil {
-		return result, runErr
-	}
-	if observerErr != nil {
-		return result, observerErr
 	}
 	return result, nil
 }
