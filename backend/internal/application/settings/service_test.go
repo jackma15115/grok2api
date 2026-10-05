@@ -105,6 +105,43 @@ func TestUpdatePersistsAppliesAndReportsRestart(t *testing.T) {
 	}
 }
 
+func TestStreamKeepAliveDefaultsMigrationAndPersistedDisable(t *testing.T) {
+	cfg := testConfig(t)
+	if !cfg.Server.StreamKeepAliveEnabled {
+		t.Fatal("stream keepalive must be enabled by default")
+	}
+	legacy := toDomainConfig(cfg)
+	legacy.Server.StreamKeepAliveEnabled = nil
+	repo := &runtimeSettingsRepositoryStub{value: legacy, found: true}
+	loaded, _, _, err := LoadPersisted(context.Background(), cfg, repo)
+	if err != nil || !loaded.Server.StreamKeepAliveEnabled {
+		t.Fatalf("legacy settings disabled the default: enabled=%v err=%v", loaded.Server.StreamKeepAliveEnabled, err)
+	}
+	cfg.Server.StreamKeepAliveEnabled = false
+	loaded, _, _, err = LoadPersisted(context.Background(), cfg, repo)
+	if err != nil || loaded.Server.StreamKeepAliveEnabled {
+		t.Fatalf("legacy settings overrode an explicit config-file disable: enabled=%v err=%v", loaded.Server.StreamKeepAliveEnabled, err)
+	}
+	service := NewService(loaded, time.Time{}, 0, repo, nil, nil)
+	for _, enabled := range []bool{true, false} {
+		input := service.Get().Config
+		input.Server.StreamKeepAliveEnabled = &enabled
+		snapshot, err := service.Update(context.Background(), service.Get().Revision, input)
+		if err != nil || service.StreamKeepAliveEnabled() != enabled || len(snapshot.RestartRequired) != 0 {
+			t.Fatalf("keepalive did not hot-update: enabled=%v snapshot=%+v err=%v", enabled, snapshot, err)
+		}
+		reloaded, _, _, err := LoadPersisted(context.Background(), cfg, repo)
+		if err != nil || reloaded.Server.StreamKeepAliveEnabled != enabled {
+			t.Fatalf("keepalive setting was not persisted: enabled=%v err=%v", reloaded.Server.StreamKeepAliveEnabled, err)
+		}
+		input = service.Get().Config
+		input.Server.StreamKeepAliveEnabled = nil
+		if _, err := service.Update(context.Background(), service.Get().Revision, input); err != nil || service.StreamKeepAliveEnabled() != enabled {
+			t.Fatalf("an older admin client reset keepalive: enabled=%v err=%v", service.StreamKeepAliveEnabled(), err)
+		}
+	}
+}
+
 func TestUpdateRejectsBuildResponseHeaderTimeoutOutsideSafeRange(t *testing.T) {
 	for _, value := range []string{"29s", "31m"} {
 		t.Run(value, func(t *testing.T) {

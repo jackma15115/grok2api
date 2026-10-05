@@ -173,6 +173,11 @@ export function SettingsPage() {
           </SettingsPane>
 
           <SettingsPane value="delivery">
+          <SettingsSection title={t("settings.server.streamKeepAliveTitle")}>
+            <SettingsField controlId="server-stream-keepalive" label={t("settings.server.streamKeepAliveEnabled")} description={t("settings.server.streamKeepAliveHelp")}>
+              <Controller control={form.control} name="server.streamKeepAliveEnabled" render={({ field }) => <Switch id="server-stream-keepalive" checked={field.value} onCheckedChange={field.onChange} />} />
+            </SettingsField>
+          </SettingsSection>
           <SettingsSection title={t("settings.media.title")}>
             <div className="space-y-0">
               <SettingsField controlId="media-max-image-size" label={t("settings.media.maxImageSize")} description={t("settings.media.maxImageSizeHelp")} error={form.formState.errors.media?.maxImageSize?.message}>

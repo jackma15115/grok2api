@@ -32,11 +32,12 @@ import (
 )
 
 type Handler struct {
-	gateway          *gateway.Service
-	models           *modelapp.Service
-	maxBodyBytes     int64
-	publicAPIBaseURL string
-	publicBaseURL    func() string
+	gateway                *gateway.Service
+	models                 *modelapp.Service
+	maxBodyBytes           int64
+	publicAPIBaseURL       string
+	publicBaseURL          func() string
+	streamKeepAliveEnabled func() bool
 }
 
 const (
@@ -321,7 +322,7 @@ func (h *Handler) createChatCompletion(c *gin.Context) {
 	}
 	requestID, _ := c.Get(middleware.RequestIDKey)
 	requestIDValue, _ := requestID.(string)
-	result, err := h.gateway.CreateChatCompletion(c.Request.Context(), gateway.Input{
+	input := gateway.Input{
 		RequestID: requestIDValue, ClientKey: clientKey, PublicModel: request.Model,
 		Body: body, Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
 		PromptCacheSeed:           extractPromptCacheSeed(c.Request.Header, body),
@@ -330,6 +331,11 @@ func (h *Handler) createChatCompletion(c *gin.Context) {
 		Method:                    c.Request.Method,
 		Path:                      c.Request.URL.Path,
 		Headers:                   c.Request.Header.Clone(),
+	}
+	keepAlive := h.beginStreamKeepAlive(c, request.Stream, streamProtocolChat, request.Model)
+	defer keepAlive.Close()
+	result, err := awaitGatewayResult(c.Request.Context(), keepAlive, func(ctx context.Context) (*gateway.Result, error) {
+		return h.gateway.CreateChatCompletion(ctx, input)
 	})
 	if err != nil {
 		writeGatewayError(c, err)
@@ -366,7 +372,7 @@ func (h *Handler) createMessage(c *gin.Context) {
 	}
 	requestID, _ := c.Get(middleware.RequestIDKey)
 	requestIDValue, _ := requestID.(string)
-	result, err := h.gateway.CreateMessage(c.Request.Context(), gateway.Input{
+	input := gateway.Input{
 		RequestID: requestIDValue, ClientKey: clientKey, PublicModel: request.Model,
 		Body: body, Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
 		PromptCacheSeed:           extractPromptCacheSeed(c.Request.Header, body),
@@ -375,6 +381,11 @@ func (h *Handler) createMessage(c *gin.Context) {
 		Method:                    c.Request.Method,
 		Path:                      c.Request.URL.Path,
 		Headers:                   c.Request.Header.Clone(),
+	}
+	keepAlive := h.beginStreamKeepAlive(c, request.Stream, streamProtocolAnthropic, request.Model)
+	defer keepAlive.Close()
+	result, err := awaitGatewayResult(c.Request.Context(), keepAlive, func(ctx context.Context) (*gateway.Result, error) {
+		return h.gateway.CreateMessage(ctx, input)
 	})
 	if err != nil {
 		writeGatewayAnthropicError(c, err)
@@ -436,12 +447,17 @@ func (h *Handler) generateImage(c *gin.Context) {
 	if !ok {
 		return
 	}
-	result, err := h.gateway.GenerateImage(c.Request.Context(), gateway.ImageGenerationInput{
+	input := gateway.ImageGenerationInput{
 		RequestID: requestID, ClientKey: clientKey, PublicModel: request.Model, Prompt: request.Prompt,
 		Count: count, Size: request.Size, AspectRatio: request.AspectRatio,
 		Resolution: request.Resolution, Quality: quality, ResponseFormat: request.ResponseFormat,
 		Streaming: request.Stream, PartialImages: partialImages,
 		Method: c.Request.Method, Path: c.Request.URL.Path, Headers: c.Request.Header.Clone(),
+	}
+	keepAlive := h.beginStreamKeepAlive(c, request.Stream, streamProtocolImage, request.Model)
+	defer keepAlive.Close()
+	result, err := awaitGatewayResult(c.Request.Context(), keepAlive, func(ctx context.Context) (*gateway.Result, error) {
+		return h.gateway.GenerateImage(ctx, input)
 	})
 	if err != nil {
 		writeGatewayError(c, err)
@@ -675,12 +691,17 @@ func (h *Handler) editImage(c *gin.Context) {
 	if !ok {
 		return
 	}
-	result, err := h.gateway.EditImage(c.Request.Context(), gateway.ImageEditInput{
+	input := gateway.ImageEditInput{
 		RequestID: requestID, ClientKey: clientKey, PublicModel: model, Prompt: prompt,
 		ImageURLs: imageURLs, Count: count, Size: size, AspectRatio: aspectRatio,
 		Resolution: resolution, Quality: quality, ResponseFormat: request.ResponseFormat,
 		Streaming: request.Stream, PartialImages: partialImages,
 		Method: c.Request.Method, Path: c.Request.URL.Path, Headers: c.Request.Header.Clone(),
+	}
+	keepAlive := h.beginStreamKeepAlive(c, request.Stream, streamProtocolImage, model)
+	defer keepAlive.Close()
+	result, err := awaitGatewayResult(c.Request.Context(), keepAlive, func(ctx context.Context) (*gateway.Result, error) {
+		return h.gateway.EditImage(ctx, input)
 	})
 	if err != nil {
 		writeGatewayError(c, err)
@@ -1164,12 +1185,14 @@ func (h *Handler) handleCreate(c *gin.Context, compact bool) {
 		Path:                      c.Request.URL.Path,
 		Headers:                   c.Request.Header.Clone(),
 	}
-	var result *gateway.Result
-	if compact {
-		result, err = h.gateway.CompactResponse(c.Request.Context(), input)
-	} else {
-		result, err = h.gateway.CreateResponse(c.Request.Context(), input)
-	}
+	keepAlive := h.beginStreamKeepAlive(c, request.Stream && !compact, streamProtocolResponses, request.Model)
+	defer keepAlive.Close()
+	result, err := awaitGatewayResult(c.Request.Context(), keepAlive, func(ctx context.Context) (*gateway.Result, error) {
+		if compact {
+			return h.gateway.CompactResponse(ctx, input)
+		}
+		return h.gateway.CreateResponse(ctx, input)
+	})
 	if err != nil {
 		writeGatewayError(c, err)
 		return
@@ -1249,6 +1272,10 @@ func (h *Handler) writeProtocolResult(c *gin.Context, result *gateway.Result, st
 	usage := gateway.Usage{}
 	responseID := ""
 	errorCode := ""
+	keepAlive := requestStreamKeepAlive(c)
+	if keepAlive != nil {
+		result.Body = newKeepAliveReader(result.Body, keepAlive)
+	}
 	defer result.Body.Close()
 	defer func() { result.Finalize(usage, responseID, errorCode) }()
 	if isUpstreamCredentialStatus(result.StatusCode) {
@@ -1291,7 +1318,9 @@ func (h *Handler) writeProtocolResult(c *gin.Context, result *gateway.Result, st
 		writeOpenAIError(c, http.StatusBadGateway, "response_too_large", "上游响应超过代理安全上限")
 		return
 	}
-	copyHeaders(c.Writer.Header(), result.Header)
+	if !c.Writer.Written() {
+		copyHeaders(c.Writer.Header(), result.Header)
+	}
 	if result.StatusCode >= 400 {
 		errorCode = "upstream_error"
 		if stream && !isEventStreamContentType(result.Header.Get("Content-Type")) {
@@ -1315,10 +1344,15 @@ func (h *Handler) writeProtocolResult(c *gin.Context, result *gateway.Result, st
 			return
 		}
 	}
-	c.Status(result.StatusCode)
+	if stream && !c.Writer.Written() {
+		setInferenceStreamHeaders(c.Writer.Header())
+	}
+	if !c.Writer.Written() {
+		c.Status(result.StatusCode)
+	}
 	var err error
 	if stream {
-		metadata, copyErr := copyStreamWithFallbackModel(c.Writer, result.Body, protocol, result.MarkFirstToken, fallbackModel)
+		metadata, copyErr := copyStreamWithKeepAlive(c.Writer, result.Body, protocol, result.MarkFirstToken, fallbackModel, keepAlive)
 		usage, responseID, err = metadata.Usage, metadata.ResponseID, copyErr
 		if metadata.StreamFailure != nil && result.RecordStreamFailure != nil {
 			result.RecordStreamFailure(*metadata.StreamFailure)
@@ -1403,6 +1437,10 @@ func copyStream(writer gin.ResponseWriter, source io.Reader, protocol streamProt
 }
 
 func copyStreamWithFallbackModel(writer gin.ResponseWriter, source io.Reader, protocol streamProtocol, onFirstToken func(), fallbackModel string) (responseMetadata, error) {
+	return copyStreamWithKeepAlive(writer, source, protocol, onFirstToken, fallbackModel, nil)
+}
+
+func copyStreamWithKeepAlive(writer gin.ResponseWriter, source io.Reader, protocol streamProtocol, onFirstToken func(), fallbackModel string, keepAlive *streamKeepAlive) (responseMetadata, error) {
 	inspector := &responseInspector{protocol: protocol, onFirstToken: onFirstToken}
 	markerFilter := internalSSEMarkerFilter{enabled: protocol == streamProtocolChat || protocol == streamProtocolAnthropic}
 	var compat responsesCompatState
@@ -1412,12 +1450,15 @@ func copyStreamWithFallbackModel(writer gin.ResponseWriter, source io.Reader, pr
 	transferred := 0
 	for {
 		n, readErr := source.Read(buffer)
-		if n > 0 {
-			if received+n > maxStreamResponseTransferBytes {
-				return inspector.Metadata(), fmt.Errorf("%w: 流式响应超过 %d MiB", errResponseTransferLimit, maxStreamResponseTransferBytes>>20)
-			}
-			received += n
-			chunk := buffer[:n]
+		if received+n > maxStreamResponseTransferBytes {
+			return inspector.Metadata(), fmt.Errorf("%w: 流式响应超过 %d MiB", errResponseTransferLimit, maxStreamResponseTransferBytes>>20)
+		}
+		received += n
+		chunk := buffer[:n]
+		if keepAlive != nil {
+			chunk = keepAlive.frame(chunk, readErr != nil)
+		}
+		if len(chunk) > 0 {
 			if protocol == streamProtocolChat {
 				// The internal reasoning marker is intentionally removed before
 				// forwarding, but still counts as generation start.
@@ -1517,6 +1558,10 @@ func streamAbortTrailer(protocol streamProtocol, cause error, meta responseMetad
 	case errors.Is(cause, errUpstreamStreamIncomplete):
 		code, message = "upstream_stream_incomplete", "上游流式响应未完整结束"
 	}
+	return streamErrorTrailer(protocol, code, message, "server_error", meta, compat)
+}
+
+func streamErrorTrailer(protocol streamProtocol, code, message, errorType string, meta responseMetadata, compat *responsesCompatState) []byte {
 	switch protocol {
 	case streamProtocolChat:
 		payload, err := json.Marshal(map[string]any{
@@ -1524,7 +1569,7 @@ func streamAbortTrailer(protocol streamProtocol, cause error, meta responseMetad
 			"error": map[string]any{
 				"code":    code,
 				"message": message,
-				"type":    "server_error",
+				"type":    errorType,
 			},
 		})
 		if err != nil {
@@ -1575,13 +1620,19 @@ func streamAbortTrailer(protocol streamProtocol, cause error, meta responseMetad
 		if code == "upstream_output_loop" {
 			anthropicMessage = code + ": " + message
 		}
+		if errorType == "server_error" {
+			errorType = "api_error"
+		}
 		payload, err := json.Marshal(map[string]any{
 			"type":  "error",
-			"error": map[string]any{"type": "api_error", "message": anthropicMessage},
+			"error": map[string]any{"type": errorType, "message": anthropicMessage},
 		})
 		if err != nil {
 			return nil
 		}
+		return []byte("event: error\ndata: " + string(payload) + "\n\n")
+	case streamProtocolImage:
+		payload, _ := json.Marshal(map[string]any{"type": "error", "code": code, "message": message})
 		return []byte("event: error\ndata: " + string(payload) + "\n\n")
 	default:
 		return nil
@@ -2282,6 +2333,10 @@ func writeOpenAIError(c *gin.Context, status int, code, message string) {
 	case status >= 500:
 		errorType = "server_error"
 	}
+	if keepAlive := requestStreamKeepAlive(c); keepAlive != nil && keepAlive.started {
+		keepAlive.writeError(c, errorType, code, message)
+		return
+	}
 	c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"message": message, "type": errorType, "code": code, "param": nil}})
 }
 
@@ -2440,6 +2495,14 @@ func selectionErrorResponse(c *gin.Context, failure *gateway.SelectionUnavailabl
 }
 
 func writeAnthropicError(c *gin.Context, status int, errorType, message string, errorCode ...string) {
+	if keepAlive := requestStreamKeepAlive(c); keepAlive != nil && keepAlive.started {
+		code := "upstream_error"
+		if len(errorCode) > 0 && errorCode[0] != "" {
+			code = errorCode[0]
+		}
+		keepAlive.writeError(c, errorType, code, message)
+		return
+	}
 	errorPayload := gin.H{"type": errorType, "message": message}
 	if len(errorCode) > 0 && errorCode[0] != "" && errorCode[0] != "upstream_unavailable" {
 		errorPayload["code"] = errorCode[0]

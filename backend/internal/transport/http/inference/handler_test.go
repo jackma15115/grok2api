@@ -1,6 +1,7 @@
 package inference
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,6 +12,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -22,6 +25,274 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/pkg/neterror"
 	"github.com/gin-gonic/gin"
 )
+
+func TestStreamKeepAliveDuringGatewayWaitAndFailure(t *testing.T) {
+	for _, protocol := range []streamProtocol{streamProtocolChat, streamProtocolResponses, streamProtocolAnthropic, streamProtocolImage} {
+		t.Run(fmt.Sprint(protocol), func(t *testing.T) {
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+			router := gin.New()
+			router.GET("/stream", func(c *gin.Context) {
+				h := NewHandler(nil, nil, 1024)
+				s := h.beginStreamKeepAlive(c, true, protocol, "grok-test")
+				defer s.Close()
+				s.ticker.Stop()
+				ticks := make(chan time.Time, 1)
+				ticks <- time.Now()
+				s.ticks = ticks
+				_, err := awaitGatewayResult(c.Request.Context(), s, func(ctx context.Context) (*gateway.Result, error) {
+					select {
+					case <-release:
+						return nil, gateway.ErrModelNotFound
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+				})
+				if protocol == streamProtocolAnthropic {
+					writeGatewayAnthropicError(c, err)
+				} else {
+					writeGatewayError(c, err)
+				}
+			})
+			server := httptest.NewServer(router)
+			defer server.Close()
+			client := &http.Client{Timeout: 5 * time.Second}
+			resp, err := client.Get(server.URL + "/stream")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			reader := bufio.NewReader(resp.Body)
+			first, err := reader.ReadString('\n')
+			if err != nil || first != ": PING\n" || resp.StatusCode != http.StatusOK || !isEventStreamContentType(resp.Header.Get("Content-Type")) || resp.Header.Get("X-Accel-Buffering") != "no" {
+				t.Fatalf("heartbeat was not flushed before upstream completed: line=%q err=%v status=%d headers=%v", first, err, resp.StatusCode, resp.Header)
+			}
+			releaseOnce.Do(func() { close(release) })
+			body, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expectedError := "model_not_found"
+			if protocol == streamProtocolAnthropic {
+				expectedError = "not_found_error"
+			}
+			if !strings.Contains(string(body), "data:") || !strings.Contains(string(body), expectedError) {
+				t.Fatalf("expected a protocol error after the heartbeat: %s", body)
+			}
+			switch protocol {
+			case streamProtocolChat:
+				if !strings.HasSuffix(string(body), "data: [DONE]\n\n") {
+					t.Fatalf("Chat failure did not terminate: %s", body)
+				}
+			case streamProtocolResponses:
+				if !strings.Contains(string(body), "event: response.failed\n") || !strings.Contains(string(body), `"model":"grok-test"`) {
+					t.Fatalf("Responses failure did not include the model: %s", body)
+				}
+			default:
+				if !strings.Contains(string(body), "event: error\n") {
+					t.Fatalf("failure event missing: %s", body)
+				}
+			}
+		})
+	}
+}
+
+type failingStreamWriter struct {
+	gin.ResponseWriter
+	err error
+}
+
+func (w failingStreamWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestStreamKeepAliveWriteFailureCancelsGatewayAndReleasesResult(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/stream", nil)
+	failure := errors.New("client write failed")
+	c.Writer = failingStreamWriter{ResponseWriter: c.Writer, err: failure}
+	s := NewHandler(nil, nil, 1024).beginStreamKeepAlive(c, true, streamProtocolChat, "grok-test")
+	defer s.Close()
+	s.ticker.Stop()
+	ticks := make(chan time.Time, 1)
+	ticks <- time.Now()
+	s.ticks = ticks
+	body := &pausedStreamBody{closed: make(chan struct{})}
+	finalized := 0
+	result, err := awaitGatewayResult(c.Request.Context(), s, func(ctx context.Context) (*gateway.Result, error) {
+		<-ctx.Done()
+		return &gateway.Result{Body: body, Finalize: func(gateway.Usage, string, string) { finalized++ }}, nil
+	})
+	if result != nil || !errors.Is(err, failure) || finalized != 1 {
+		t.Fatalf("write failure did not cancel and finalize: result=%v err=%v finalized=%d", result, err, finalized)
+	}
+	select {
+	case <-body.closed:
+	default:
+		t.Fatal("result created during cancellation was not closed")
+	}
+}
+
+// The second upstream Read blocks after the first fragment has reached the
+// handler, providing a deterministic gap for a heartbeat or cancellation.
+type pausedStreamBody struct {
+	prefix, tail string
+	waiting      chan struct{}
+	release      chan struct{}
+	closed       chan struct{}
+	step         int
+	closeOnce    sync.Once
+}
+
+func (r *pausedStreamBody) Read(buffer []byte) (int, error) {
+	if r.step == 0 {
+		r.step++
+		return copy(buffer, r.prefix), nil
+	}
+	if r.step == 1 {
+		r.step++
+		close(r.waiting)
+		select {
+		case <-r.release:
+			return copy(buffer, r.tail), io.EOF
+		case <-r.closed:
+			return 0, io.ErrClosedPipe
+		}
+	}
+	return 0, io.EOF
+}
+
+func (r *pausedStreamBody) Close() error {
+	r.closeOnce.Do(func() { close(r.closed) })
+	return nil
+}
+
+func TestStreamKeepAlivePreservesPartialFramesAndFirstToken(t *testing.T) {
+	fixtures := []struct {
+		protocol streamProtocol
+		prefix   string
+		tail     string
+	}{
+		{streamProtocolChat, `data: {"choices":[{"delta":{"content":"hel`, `lo"}}]}` + "\n\ndata: [DONE]\n\n"},
+		{streamProtocolResponses, "event: response.output_text.delta\r\n" + `data: {"type":"response.output_text.delta","delta":"hel`, `lo"}` + "\r\n\r\nevent: response.completed\r\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"created_at\":1,\"model\":\"grok-test\",\"status\":\"completed\",\"output\":[]}}\r\n\r\n"},
+		{streamProtocolAnthropic, "event: content_block_delta\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hel`, `lo"}}` + "\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"},
+		{streamProtocolImage, "event: image_generation.completed\n" + `data: {"type":"image_generation.completed","b64_json":"hel`, `lo"}` + "\n\n"},
+	}
+	for _, fixture := range fixtures {
+		t.Run(fmt.Sprint(fixture.protocol), func(t *testing.T) {
+			source := &pausedStreamBody{prefix: fixture.prefix, tail: fixture.tail, waiting: make(chan struct{}), release: make(chan struct{}), closed: make(chan struct{})}
+			defer source.Close()
+			var releaseOnce sync.Once
+			t.Cleanup(func() { releaseOnce.Do(func() { close(source.release) }) })
+			var marked atomic.Int64
+			ticks := make(chan time.Time)
+			done := make(chan string, 1)
+			router := gin.New()
+			router.GET("/stream", func(c *gin.Context) {
+				h := NewHandler(nil, nil, 1024)
+				s := h.beginStreamKeepAlive(c, true, fixture.protocol, "grok-test")
+				defer s.Close()
+				s.ticker.Stop()
+				s.ticks = ticks
+				result := &gateway.Result{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: source, MarkFirstToken: func() { marked.Add(1) }, Finalize: func(_ gateway.Usage, _, code string) { done <- code }}
+				h.writeProtocolResult(c, result, true, fixture.protocol == streamProtocolAnthropic, fixture.protocol, "grok-test")
+			})
+			server := httptest.NewServer(router)
+			defer server.Close()
+			go func() {
+				<-source.waiting
+				ticks <- time.Now()
+			}()
+			resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(server.URL + "/stream")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			reader := bufio.NewReader(resp.Body)
+			first, err := reader.ReadString('\n')
+			if err != nil || first != ": PING\n" || marked.Load() != 0 {
+				t.Fatalf("partial frame or first-token timing leaked before completion: first=%q err=%v marked=%d", first, err, marked.Load())
+			}
+			releaseOnce.Do(func() { close(source.release) })
+			rest, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			baseline := httptest.NewRecorder()
+			baselineContext, _ := gin.CreateTestContext(baseline)
+			if _, err := copyStreamWithFallbackModel(baselineContext.Writer, strings.NewReader(fixture.prefix+fixture.tail), fixture.protocol, nil, "grok-test"); err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.ReplaceAll(first+string(rest), ": PING\n\n", ""); got != baseline.Body.String() {
+				t.Fatalf("heartbeat changed the SSE payload:\n got %q\nwant %q", got, baseline.Body.String())
+			}
+			if code := <-done; code != "" {
+				t.Fatalf("stream failed: %s", code)
+			}
+			expectedMarks := int64(1)
+			if fixture.protocol == streamProtocolImage {
+				expectedMarks = 0
+			}
+			if marked.Load() != expectedMarks {
+				t.Fatalf("first-token callback count = %d, want %d", marked.Load(), expectedMarks)
+			}
+		})
+	}
+}
+
+func TestStreamKeepAliveDisabledOrNonStreamingPreservesHTTPError(t *testing.T) {
+	for _, test := range []struct{ enabled, stream bool }{{false, true}, {true, false}, {true, true}} {
+		t.Run(fmt.Sprint(test), func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/stream", nil)
+			h := NewHandler(nil, nil, 1024).SetStreamKeepAliveResolver(func() bool { return test.enabled })
+			s := h.beginStreamKeepAlive(c, test.stream, streamProtocolChat, "grok-test")
+			defer s.Close()
+			_, err := awaitGatewayResult(c.Request.Context(), s, func(context.Context) (*gateway.Result, error) { return nil, gateway.ErrModelNotFound })
+			writeGatewayError(c, err)
+			if recorder.Code != 404 || strings.Contains(recorder.Body.String(), ": PING") || !json.Valid(recorder.Body.Bytes()) {
+				t.Fatalf("early error changed: status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if (s != nil) != (test.enabled && test.stream) {
+				t.Fatalf("unexpected keepalive activation: %v", s)
+			}
+		})
+	}
+}
+
+func TestStreamKeepAliveClientDisconnectClosesBlockedUpstream(t *testing.T) {
+	source := &pausedStreamBody{prefix: "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n", waiting: make(chan struct{}), release: make(chan struct{}), closed: make(chan struct{})}
+	defer source.Close()
+	done := make(chan struct{})
+	router := gin.New()
+	router.GET("/stream", func(c *gin.Context) {
+		defer close(done)
+		h := NewHandler(nil, nil, 1024)
+		s := h.beginStreamKeepAlive(c, true, streamProtocolChat, "grok-test")
+		defer s.Close()
+		result := &gateway.Result{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: source, Finalize: func(gateway.Usage, string, string) {}}
+		h.writeResult(c, result, true, streamProtocolChat)
+	})
+	server := httptest.NewServer(router)
+	defer server.Close()
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(server.URL + "/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-source.waiting
+	resp.Body.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("client cancellation did not stop the stream handler")
+	}
+	select {
+	case <-source.closed:
+	default:
+		t.Fatal("blocked upstream body was not closed")
+	}
+}
 
 type idleErrorReader struct{}
 

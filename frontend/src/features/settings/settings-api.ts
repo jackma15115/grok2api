@@ -3,7 +3,7 @@ import { createObjectDecoder, decodeBooleanResult, hasShape, isArrayOf, isBoolea
 import type { SortOrder } from "@/shared/lib/table-sort";
 
 export type SettingsConfigDTO = {
-  server: { maxConcurrentRequests: number };
+  server: { maxConcurrentRequests: number; streamKeepAliveEnabled?: boolean };
   providerBuild: { baseURL: string; fallbackBaseURL: string; clientVersion: string; clientIdentifier: string; tokenAuth: string; tokenAuthConfigured: boolean; userAgent: string; responseHeaderTimeout: string; streamIdleTimeout: string };
   providerWeb: {
     baseURL: string; quotaTimeout: string; chatTimeout: string; streamIdleTimeout: string; imageTimeout: string; videoTimeout: string;
@@ -115,7 +115,7 @@ export type SettingsSnapshotDTO = {
 };
 
 const settingsConfigValidator = hasShape({
-  server: hasShape({ maxConcurrentRequests: isNumber }),
+  server: hasShape({ maxConcurrentRequests: isNumber, streamKeepAliveEnabled: isOptional(isBoolean) }),
   providerBuild: hasShape({ baseURL: isString, fallbackBaseURL: isString, clientVersion: isString, clientIdentifier: isString, tokenAuth: isString, tokenAuthConfigured: isBoolean, userAgent: isString, responseHeaderTimeout: isString, streamIdleTimeout: isString }),
   providerWeb: hasShape({
     baseURL: isString, quotaTimeout: isString, chatTimeout: isString, streamIdleTimeout: isOptional(isString), imageTimeout: isString, videoTimeout: isString,

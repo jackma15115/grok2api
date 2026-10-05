@@ -73,7 +73,8 @@ type ProviderConsoleConfig struct {
 
 // ServerConfig 是管理接口使用的推理入口容量输入。
 type ServerConfig struct {
-	MaxConcurrentRequests int
+	MaxConcurrentRequests  int
+	StreamKeepAliveEnabled *bool
 }
 
 // BatchConfig 是管理接口使用的批量任务并发输入。
@@ -236,6 +237,12 @@ func (s *Service) PublicAPIBaseURL() string {
 	return s.cfg.Frontend.EffectivePublicAPIBaseURL()
 }
 
+func (s *Service) StreamKeepAliveEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg.Server.StreamKeepAliveEnabled
+}
+
 // Update 校验并持久化运行设置，再原子替换进程内配置。
 func (s *Service) Update(ctx context.Context, expectedRevision uint64, input EditableConfig) (Snapshot, error) {
 	s.updateMu.Lock()
@@ -309,6 +316,9 @@ func (s *Service) ReloadPersisted(ctx context.Context) error {
 }
 
 func applyDomainConfig(base config.Config, value settingsdomain.Config) config.Config {
+	if value.Server.StreamKeepAliveEnabled != nil {
+		base.Server.StreamKeepAliveEnabled = *value.Server.StreamKeepAliveEnabled
+	}
 	// 旧版运行设置没有 Server 字段，反序列化后为零；升级时沿用当前配置默认值。
 	if value.Server.MaxConcurrentRequests > 0 {
 		base.Server.MaxConcurrentRequests = value.Server.MaxConcurrentRequests
@@ -455,8 +465,9 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 func toDomainConfig(value config.Config) settingsdomain.Config {
 	randomDelay := value.Batch.RandomDelay.Value()
 	accountIsolatedConnections := value.Routing.AccountIsolatedConnections
+	streamKeepAliveEnabled := value.Server.StreamKeepAliveEnabled
 	return settingsdomain.Config{
-		Server: settingsdomain.ServerConfig{MaxConcurrentRequests: value.Server.MaxConcurrentRequests},
+		Server: settingsdomain.ServerConfig{MaxConcurrentRequests: value.Server.MaxConcurrentRequests, StreamKeepAliveEnabled: &streamKeepAliveEnabled},
 		ProviderBuild: settingsdomain.ProviderBuildConfig{
 			BaseURL: value.Provider.Build.BaseURL, FallbackBaseURL: config.NormalizeBuildFallbackBaseURL(value.Provider.Build.FallbackBaseURL),
 			ClientVersion: value.Provider.Build.ClientVersion, ClientIdentifier: value.Provider.Build.ClientIdentifier,
@@ -552,6 +563,9 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 	}
 	next := current
 	next.Server.MaxConcurrentRequests = input.Server.MaxConcurrentRequests
+	if input.Server.StreamKeepAliveEnabled != nil {
+		next.Server.StreamKeepAliveEnabled = *input.Server.StreamKeepAliveEnabled
+	}
 	next.Provider.Build.BaseURL = strings.TrimSpace(input.ProviderBuild.BaseURL)
 	next.Provider.Build.FallbackBaseURL = config.NormalizeBuildFallbackBaseURL(input.ProviderBuild.FallbackBaseURL)
 	next.Provider.Build.ClientVersion = strings.TrimSpace(input.ProviderBuild.ClientVersion)
@@ -700,8 +714,9 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 }
 
 func toEditable(cfg config.Config) EditableConfig {
+	streamKeepAliveEnabled := cfg.Server.StreamKeepAliveEnabled
 	return EditableConfig{
-		Server: ServerConfig{MaxConcurrentRequests: cfg.Server.MaxConcurrentRequests},
+		Server: ServerConfig{MaxConcurrentRequests: cfg.Server.MaxConcurrentRequests, StreamKeepAliveEnabled: &streamKeepAliveEnabled},
 		ProviderBuild: ProviderBuildConfig{
 			BaseURL: cfg.Provider.Build.BaseURL, FallbackBaseURL: config.NormalizeBuildFallbackBaseURL(cfg.Provider.Build.FallbackBaseURL),
 			ClientVersion: cfg.Provider.Build.ClientVersion, ClientIdentifier: cfg.Provider.Build.ClientIdentifier,

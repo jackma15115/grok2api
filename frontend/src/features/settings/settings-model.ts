@@ -65,6 +65,7 @@ function validPublicAPIBaseURL(value: string): boolean {
 export const settingsSchema = z.object({
   server: z.object({
     maxConcurrentRequests: positiveInteger.max(100_000),
+    streamKeepAliveEnabled: z.boolean(),
   }),
   providerBuild: z.object({
     baseURL: z.url(),
@@ -195,7 +196,7 @@ export type SettingsForm = z.infer<typeof settingsSchema>;
 
 export function toSettingsForm(config: SettingsConfigDTO): SettingsForm {
   return {
-    server: config.server,
+    server: { ...config.server, streamKeepAliveEnabled: config.server.streamKeepAliveEnabled ?? true },
     providerBuild: { ...config.providerBuild, responseHeaderTimeout: parseDuration(config.providerBuild.responseHeaderTimeout), streamIdleTimeout: parseDuration(config.providerBuild.streamIdleTimeout) },
     providerWeb: {
       ...config.providerWeb,

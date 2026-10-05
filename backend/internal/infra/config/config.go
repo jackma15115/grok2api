@@ -74,13 +74,14 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Listen                string   `yaml:"listen"`
-	MaxBodyBytes          int64    `yaml:"maxBodyBytes"`
-	MaxConcurrentRequests int      `yaml:"maxConcurrentRequests"`
-	TrustedProxies        []string `yaml:"trustedProxies"`
-	ReadTimeout           Duration `yaml:"readTimeout"`
-	RequestTimeout        Duration `yaml:"requestTimeout"`
-	SwaggerEnabled        bool     `yaml:"swaggerEnabled"`
+	Listen                 string   `yaml:"listen"`
+	MaxBodyBytes           int64    `yaml:"maxBodyBytes"`
+	MaxConcurrentRequests  int      `yaml:"maxConcurrentRequests"`
+	TrustedProxies         []string `yaml:"trustedProxies"`
+	ReadTimeout            Duration `yaml:"readTimeout"`
+	RequestTimeout         Duration `yaml:"requestTimeout"`
+	StreamKeepAliveEnabled bool     `yaml:"streamKeepAliveEnabled"`
+	SwaggerEnabled         bool     `yaml:"swaggerEnabled"`
 }
 
 type FrontendConfig struct {
@@ -887,11 +888,12 @@ func NormalizeBuildFallbackBaseURL(value string) string {
 func defaultConfig() Config {
 	return Config{
 		Server: ServerConfig{
-			Listen:                "127.0.0.1:8000",
-			MaxBodyBytes:          32 << 20,
-			MaxConcurrentRequests: 1024,
-			ReadTimeout:           Duration(15 * time.Minute),
-			RequestTimeout:        Duration(2 * time.Hour),
+			Listen:                 "127.0.0.1:8000",
+			MaxBodyBytes:           32 << 20,
+			MaxConcurrentRequests:  1024,
+			ReadTimeout:            Duration(15 * time.Minute),
+			RequestTimeout:         Duration(2 * time.Hour),
+			StreamKeepAliveEnabled: true,
 		},
 		Frontend: FrontendConfig{PublicAPIBaseURL: DefaultPublicAPIBaseURL, StaticPath: "./frontend/dist"},
 		Database: DatabaseConfig{

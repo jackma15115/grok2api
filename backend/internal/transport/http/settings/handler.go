@@ -35,7 +35,8 @@ type settingsConfigDTO struct {
 }
 
 type serverConfigDTO struct {
-	MaxConcurrentRequests int `json:"maxConcurrentRequests"`
+	MaxConcurrentRequests  int   `json:"maxConcurrentRequests"`
+	StreamKeepAliveEnabled *bool `json:"streamKeepAliveEnabled,omitempty"`
 }
 
 type providerConsoleConfigDTO struct {
@@ -191,7 +192,7 @@ func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
 	clearanceProvided := value.ProviderWeb.ClearanceMode != nil || value.ProviderWeb.FlareSolverrURL != nil ||
 		value.ProviderWeb.ClearanceTimeout != nil || value.ProviderWeb.ClearanceRefresh != nil
 	result := settingsapp.EditableConfig{
-		Server: settingsapp.ServerConfig{MaxConcurrentRequests: value.Server.MaxConcurrentRequests},
+		Server: settingsapp.ServerConfig{MaxConcurrentRequests: value.Server.MaxConcurrentRequests, StreamKeepAliveEnabled: value.Server.StreamKeepAliveEnabled},
 		ProviderBuild: settingsapp.ProviderBuildConfig{
 			BaseURL: value.ProviderBuild.BaseURL, FallbackBaseURL: value.ProviderBuild.FallbackBaseURL,
 			ClientVersion: value.ProviderBuild.ClientVersion, ClientIdentifier: value.ProviderBuild.ClientIdentifier,
@@ -278,7 +279,7 @@ func newSettingsResponse(value settingsapp.Snapshot) settingsResponse {
 	config := value.Config
 	return settingsResponse{
 		Config: settingsConfigDTO{
-			Server: serverConfigDTO{MaxConcurrentRequests: config.Server.MaxConcurrentRequests},
+			Server: serverConfigDTO{MaxConcurrentRequests: config.Server.MaxConcurrentRequests, StreamKeepAliveEnabled: config.Server.StreamKeepAliveEnabled},
 			ProviderBuild: providerBuildConfigDTO{
 				BaseURL: config.ProviderBuild.BaseURL, FallbackBaseURL: config.ProviderBuild.FallbackBaseURL,
 				ClientVersion: config.ProviderBuild.ClientVersion, ClientIdentifier: config.ProviderBuild.ClientIdentifier,

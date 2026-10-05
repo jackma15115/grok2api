@@ -16,6 +16,8 @@ server:
   readTimeout: 15m
   # [通常不要修改] 管理 API 和非流式请求的最长生命周期。
   requestTimeout: 2h
+  # [按需修改] 流式请求每 15 秒发送 SSE 保活心跳；设为 false 可关闭。
+  streamKeepAliveEnabled: true
   # [按需修改] 仅在本地或受信任环境开启，生产环境保持 false。
   swaggerEnabled: false
 

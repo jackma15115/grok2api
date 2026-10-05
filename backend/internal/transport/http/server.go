@@ -193,6 +193,7 @@ func New(deps Dependencies) *gin.Engine {
 	inferenceHandler := inference.NewHandler(deps.Gateway, deps.Models, deps.MaxBodyBytes, deps.PublicAPIBaseURL)
 	if deps.Settings != nil {
 		inferenceHandler.SetPublicAPIBaseURLResolver(deps.Settings.PublicAPIBaseURL)
+		inferenceHandler.SetStreamKeepAliveResolver(deps.Settings.StreamKeepAliveEnabled)
 	}
 	inferenceHandler.Register(v1)
 	registerFrontend(router, deps.FrontendStaticPath)

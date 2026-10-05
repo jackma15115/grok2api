@@ -46,6 +46,8 @@ type Config struct {
 // ServerConfig 定义可热更新的推理入口容量参数。
 type ServerConfig struct {
 	MaxConcurrentRequests int
+	// Nil preserves the configured default when loading settings from older releases.
+	StreamKeepAliveEnabled *bool
 }
 
 // FrontendConfig 定义公开 API 地址的运行时覆盖值；留空时使用配置文件值。
