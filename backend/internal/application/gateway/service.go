@@ -1046,11 +1046,12 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	failureAttempts := newFailureAttemptRecorder(http.MethodPost, path)
 	normalizedMetadata := &provider.NormalizedRequestMetadata{}
 	responseStartedAt := startedAt
+	transientRetry := 0
 	forwardResponse := func(lease *accountLease, credential accountdomain.Credential, billing *accountdomain.Billing) (*provider.Response, error) {
 		started := time.Now()
 		responseStartedAt = started
 		lease.markSelectorUpstreamStarted()
-		response, err := adapter.ForwardResponse(physicalCallCtx, provider.ResponseResourceRequest{Credential: credential, ForcedEgressNodeID: input.ForcedEgressNodeID, Billing: billing, Method: http.MethodPost, Path: path, Model: route.UpstreamModel, PromptCacheKey: input.PromptCacheKey, ReasoningReplayKey: reasoningReplayKey, AllowClientToolCacheRoute: input.AllowClientToolCacheRoute, GrokTurnIndex: input.GrokTurnIndex, IdempotencyID: idempotencyID, Body: input.Body, Streaming: input.Streaming, NormalizeBody: true, Operation: string(operation), NormalizedMetadata: normalizedMetadata})
+		response, err := adapter.ForwardResponse(physicalCallCtx, provider.ResponseResourceRequest{Credential: credential, ForcedEgressNodeID: input.ForcedEgressNodeID, Billing: billing, Method: http.MethodPost, Path: path, Model: route.UpstreamModel, PromptCacheKey: input.PromptCacheKey, ReasoningReplayKey: reasoningReplayKey, AllowClientToolCacheRoute: input.AllowClientToolCacheRoute, GrokTurnIndex: input.GrokTurnIndex, TransientRetry: transientRetry, IdempotencyID: idempotencyID, Body: input.Body, Streaming: input.Streaming, NormalizeBody: true, Operation: string(operation), NormalizedMetadata: normalizedMetadata})
 		auditBase.ReasoningEffort = normalizedMetadata.ReasoningEffort
 		err = failureAttempts.captureResponse(credential, started, response, err)
 		timing.markUpstream(time.Since(started))
@@ -1128,6 +1129,11 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 				}
 				record.CreatedAt = now
 				applyAuditEgress(&record, egressTrace, route.Provider)
+				if err := budget.run("quality_disable", finalizationHealthBudget, func(stageCtx context.Context) error {
+					return s.applyOutputSpeedPenalty(stageCtx, record, credential, holdCfg, input.ForcedEgressNodeID != 0)
+				}); err != nil {
+					s.logger.Error("quality_degraded_penalty_failed", "request_id", input.RequestID, "account_id", credential.ID, "error", err)
+				}
 				if supportsStoredResponses && operation == audit.OperationResponses && responseID != "" && successful {
 					err := budget.run("response_ownership", finalizationOwnershipBudget, func(stageCtx context.Context) error {
 						return s.responses.Save(stageCtx, inferencedomain.ResponseOwnership{ResponseID: responseID, AccountID: accountID, ClientKeyID: input.ClientKey.ID, ModelRouteID: route.ID, Provider: route.Provider, PromptCacheKey: ownershipPromptCacheKey, ReasoningReplayKey: reasoningReplayKey, ExpiresAt: now.Add(responseOwnershipTTL), CreatedAt: now, UpdatedAt: now})
@@ -1338,6 +1344,9 @@ attemptLoop:
 			if shouldStopForNonAccountFingerprint(failureFingerprints, lastFailure) {
 				break
 			}
+			if isBuildTransientRetryError(err) {
+				transientRetry++
+			}
 			continue
 		}
 	handleResponse:
@@ -1383,6 +1392,9 @@ attemptLoop:
 					}
 					if shouldStopForNonAccountFingerprint(failureFingerprints, lastFailure) {
 						break attemptLoop
+					}
+					if isBuildTransientRetryError(err) {
+						transientRetry++
 					}
 				}
 				continue
@@ -1503,6 +1515,9 @@ attemptLoop:
 					if shouldStopForNonAccountFingerprint(failureFingerprints, lastFailure) {
 						break attemptLoop
 					}
+					if isBuildTransientRetryError(err) {
+						transientRetry++
+					}
 					continue attemptLoop
 				}
 				goto handleResponse
@@ -1554,7 +1569,7 @@ attemptLoop:
 			} else if s.providers.SupportsCredentialRefresh(credential.Provider) && lastFailure.CredentialRejected {
 				failureHandled = s.markReauthRequired(ctx, input.RequestID, credential, fmt.Sprintf("%s credential rejected", credential.Provider))
 			}
-			if lastFailure.AccountScoped && !failureHandled {
+			if !failureHandled && (lastFailure.AccountScoped || credential.Provider == accountdomain.ProviderBuild && response.StatusCode == http.StatusForbidden) {
 				s.selector.MarkFailure(ctx, credential, response.StatusCode, retryAfter)
 			} else if !lastFailure.AccountScoped && response.StatusCode >= http.StatusInternalServerError {
 				// Provider-wide 5xx responses should rotate this request and briefly
@@ -1570,6 +1585,9 @@ attemptLoop:
 			s.logger.Warn("upstream_request_failed", "request_id", input.RequestID, "account_id", credential.ID, "provider", credential.Provider, "status", response.StatusCode, "upstream_code", lastFailure.UpstreamCode, "account_scoped", lastFailure.AccountScoped)
 			if shouldStopForNonAccountFingerprint(failureFingerprints, lastFailure) {
 				break
+			}
+			if isBuildTransientRetryStatus(response.StatusCode) {
+				transientRetry++
 			}
 			continue
 		}
@@ -1606,6 +1624,9 @@ attemptLoop:
 					if !qualityCrossAccountReplay || shouldStopForNonAccountFingerprint(failureFingerprints, lastFailure) {
 						break
 					}
+					if isBuildTransientRetryError(peekErr) {
+						transientRetry++
+					}
 					continue
 				}
 				response.Body = replay
@@ -1615,7 +1636,7 @@ attemptLoop:
 				}
 				commit := CommitQualityHold(verdict, qualityAccountAttempts-1, holdCfg.MaxAttempts, hasNextAccount, holdCfg.OnExhausted)
 				if verdict == QualityWithhold {
-					s.applyMissingThinkingPenalty(ctx, input.RequestID, credential, holdCfg.AccountCooldown)
+					s.applyMissingThinkingPenalty(ctx, input.RequestID, credential, holdCfg.AccountCooldown, holdCfg.AutoDisable)
 				}
 				deferFailOpenAudit := commit.Action == QualityActionRetry && holdCfg.OnExhausted == qualityRetryFailOpen
 				if commit.Audit && !deferFailOpenAudit {
@@ -2095,12 +2116,31 @@ func isRetryable(status int) bool {
 	return status == 402 || status == 403 || status == 429 || status >= 500
 }
 
+// isBuildTransientRetryStatus mirrors the Grok Build client's turn-level
+// resubmit classification. Cloudflare 525/526 report an origin TLS
+// configuration failure and are deliberately excluded from transient traffic.
+func isBuildTransientRetryStatus(status int) bool {
+	return status >= http.StatusInternalServerError && status <= 599 && status != 525 && status != 526
+}
+
+func isBuildTransientRetryError(err error) bool {
+	return err != nil &&
+		!neterrorpkg.IsUpstreamResponseEmpty(err) &&
+		!errors.Is(err, errQualityEmptyStream) &&
+		!neterrorpkg.IsUpstreamOutputLoop(err)
+}
+
 func isReasoningRecoveryFailedResponse(response *provider.Response, upstreamProvider accountdomain.Provider) bool {
 	return upstreamProvider == accountdomain.ProviderBuild && response != nil && response.ReasoningRecoveryFailed
 }
 
 func isRetryableResponse(response *provider.Response, upstreamProvider accountdomain.Provider) bool {
 	if response == nil {
+		return false
+	}
+	// The official Build client treats Cloudflare origin-TLS failures as fatal,
+	// even when the edge asks clients to retry. Account rotation cannot repair them.
+	if upstreamProvider == accountdomain.ProviderBuild && (response.StatusCode == 525 || response.StatusCode == 526) {
 		return false
 	}
 	if response.StatusCode == http.StatusBadRequest && isReasoningRecoveryFailedResponse(response, upstreamProvider) {

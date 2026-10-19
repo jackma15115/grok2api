@@ -171,6 +171,7 @@ export const settingsSchema = z.object({
     .refine((value) => value.batchSize <= value.bufferSize, { path: ["batchSize"] }),
   clientKeyDefaults: z.object({ rpmLimit: positiveInteger.max(100_000), maxConcurrent: positiveInteger.max(1_024) }),
   accounts: z.object({
+    autoDisableDegradedAccounts: z.boolean(),
     markBuildForbiddenReauth: z.boolean(),
     buildForbiddenReauthCodes: z.string().superRefine((value, context) => {
       const codes = parseForbiddenCodes(value);
@@ -235,6 +236,7 @@ export function toSettingsForm(config: SettingsConfigDTO): SettingsForm {
     },
     clientKeyDefaults: config.clientKeyDefaults,
     accounts: {
+      autoDisableDegradedAccounts: config.accounts.autoDisableDegradedAccounts,
       markBuildForbiddenReauth: config.accounts.markBuildForbiddenReauth,
       buildForbiddenReauthCodes: config.accounts.buildForbiddenReauthCodes.join("\n"),
       excludeBuildBotFlaggedFromScheduling: config.accounts.excludeBuildBotFlaggedFromScheduling,
@@ -285,6 +287,7 @@ export function toSettingsDTO(config: SettingsForm): SettingsConfigDTO {
     },
     clientKeyDefaults: config.clientKeyDefaults,
     accounts: {
+      autoDisableDegradedAccounts: config.accounts.autoDisableDegradedAccounts,
       markBuildForbiddenReauth: config.accounts.markBuildForbiddenReauth,
       buildForbiddenReauthCodes: parseForbiddenCodes(config.accounts.buildForbiddenReauthCodes),
       excludeBuildBotFlaggedFromScheduling: config.accounts.excludeBuildBotFlaggedFromScheduling,
