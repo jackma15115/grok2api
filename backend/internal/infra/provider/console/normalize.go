@@ -60,8 +60,11 @@ func normalizeRequestWithMetadata(body []byte, spec ModelSpec, metadata *provide
 	if err != nil {
 		return nil, err
 	}
-	if cfg.NativeTools {
+	if cfg.NativeTools && !spec.NoSearchTools {
 		mergeSearchTools(payload)
+	}
+	if spec.NoSearchTools {
+		stripConsoleSearchTools(payload)
 	}
 	normalizeConsoleToolChoice(payload, retainedClientTools)
 	ensureConsoleToolChoicePair(payload)
@@ -401,6 +404,30 @@ func mergeSearchTools(payload map[string]any) {
 	if _, exists := payload["tool_choice"]; !exists {
 		payload["tool_choice"] = "auto"
 	}
+}
+
+// stripConsoleSearchTools removes built-in search tools the model ignores.
+// When nothing remains, tools and tool_choice are dropped together.
+func stripConsoleSearchTools(payload map[string]any) {
+	tools, ok := payload["tools"].([]any)
+	if !ok {
+		return
+	}
+	kept := tools[:0]
+	for _, rawTool := range tools {
+		if tool, ok := rawTool.(map[string]any); ok {
+			if typeName, _ := tool["type"].(string); typeName == "web_search" || typeName == "x_search" {
+				continue
+			}
+		}
+		kept = append(kept, rawTool)
+	}
+	if len(kept) == 0 {
+		delete(payload, "tools")
+		delete(payload, "tool_choice")
+		return
+	}
+	payload["tools"] = kept
 }
 
 func hasConsoleFunctionTool(tools []any, target string) bool {
