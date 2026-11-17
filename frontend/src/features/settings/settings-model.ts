@@ -80,7 +80,7 @@ export const settingsSchema = z.object({
   }),
   providerWeb: z.object({
     baseURL: z.url().refine((value) => value.startsWith("https://")),
-    statsigMode: z.enum(["manual", "local", "url"]),
+    statsigMode: z.enum(["disabled", "manual", "local", "url"]),
     statsigManualValue: z.string().trim().max(4096),
     statsigManualConfigured: z.boolean(),
     statsigSignerURL: z.string().trim().max(2048),
@@ -103,7 +103,7 @@ export const settingsSchema = z.object({
     if (value.statsigMode === "manual" && !value.statsigManualConfigured && value.statsigManualValue.length === 0) {
       context.addIssue({ code: "custom", path: ["statsigManualValue"], message: "required" });
     }
-    if (value.statsigManualValue.length > 0 && !validStatsigID(value.statsigManualValue)) {
+    if (value.statsigMode === "manual" && value.statsigManualValue.length > 0 && !validStatsigID(value.statsigManualValue)) {
       context.addIssue({ code: "custom", path: ["statsigManualValue"], message: "invalid" });
     }
     if (value.statsigMode === "url") {

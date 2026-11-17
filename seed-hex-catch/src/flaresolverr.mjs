@@ -36,9 +36,20 @@ export async function solveFlareSolverr({ baseURL, targetURL, proxyURL = "", tim
   if (!userAgent || userAgent.length > 512 || /[\x00-\x1f\x7f]/.test(userAgent)) throw new Error("FlareSolverr returned an invalid User-Agent");
   const cookies = Array.isArray(result.solution?.cookies) ? result.solution.cookies.flatMap((cookie) => {
     const name = String(cookie?.name ?? "").trim();
-    const value = String(cookie?.value ?? "").trim();
-    if (!name || !value || value.length > 16 * 1024 || /[\x00-\x1f\x7f]/.test(value)) return [];
-    return [{ name, value, domain: new URL(targetURL).hostname, path: "/" }];
+    const value = String(cookie?.value ?? "");
+    if (!name || value.length > 16 * 1024 || /[\x00-\x1f\x7f]/.test(value)) return [];
+    // Chromium enforces secure-prefixed cookie rules when importing cookies too.
+    const normalized = {
+      name,
+      value,
+      domain: cookie.domain || new URL(targetURL).hostname,
+      path: cookie.path || "/",
+      secure: cookie.secure === true,
+      httpOnly: cookie.httpOnly === true,
+    };
+    if (["Strict", "Lax", "None"].includes(cookie.sameSite)) normalized.sameSite = cookie.sameSite;
+    if (Number.isFinite(cookie.expiry) && cookie.expiry > 0) normalized.expires = cookie.expiry;
+    return [normalized];
   }) : [];
   return { userAgent, cookies };
 }

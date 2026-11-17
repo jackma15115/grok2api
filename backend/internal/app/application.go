@@ -378,6 +378,8 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 			}
 		}
 	}
+	startup := newStartupState(len(windows))
+	startup.setStatsigMode(cfg.Provider.Web.StatsigMode)
 	settingsService := settingsapp.NewService(cfg, settingsUpdatedAt, settingsRevision, runtimeSettingsRepo, notifySettings, func(next config.Config) {
 		inferenceConcurrency.UpdateLimit(next.Server.MaxConcurrentRequests)
 		bulkPool.UpdateLimit(maxBatchConcurrency(next.Batch))
@@ -399,6 +401,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		egressManager.UpdateBuildResponseHeaderTimeout(next.Provider.Build.ResponseHeaderTimeout.Value())
 		egressManager.UpdateBuildStreamIdleTimeout(next.Provider.Build.StreamIdleTimeout.Value())
 		webAdapter.UpdateConfig(webProviderConfig(next))
+		startup.setStatsigMode(next.Provider.Web.StatsigMode)
 		egressManager.UpdateClearanceConfig(clearanceConfig(next))
 		consoleAdapter.UpdateConfig(consoleProviderConfig(next))
 		mediaService.UpdateConfig(mediaConfig(next))
@@ -425,7 +428,6 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	})
 	updateService := updatecheckapp.NewService(buildinfo.CurrentVersion(), nil)
 
-	startup := newStartupState(len(windows))
 	readiness := func(readyCtx context.Context) httpserver.ReadinessSnapshot {
 		return readinessSnapshot(readyCtx, startup, runtimeHealth, modelRepo, accountRepo, providers, auditService)
 	}

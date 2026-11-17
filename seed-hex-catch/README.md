@@ -2,6 +2,12 @@
 
 English | [简体中文](README.zh-CN.md)
 
+Grok2API disables legacy signing by default and runs without this service. Existing deployments can
+select **Legacy signing → Disabled (recommended)** in Settings. The live page inspected on 2026-11-16
+did not expose the old seed/HEX; this service stays unready and returns 503 until a complete capture
+succeeds. See the [investigation](SIGN_RESEARCH.zh-CN.md). It remains available for pages that still
+produce legacy Statsig signatures.
+
 `seed-hex-catch` periodically observes a real Grok Statsig request and its
 matching Web Crypto digest input, then verifies and extracts the current seed
 and HEX. It exposes a `grok.wodf.de/sign`-compatible signing endpoint backed

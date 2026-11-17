@@ -598,7 +598,7 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 		if value := strings.TrimSpace(input.ProviderWeb.StatsigManualValue); value != "" {
 			next.Provider.Web.StatsigManualValue = value
 		}
-	} else {
+	} else if next.Provider.Web.StatsigMode != config.StatsigModeDisabled {
 		next.Provider.Web.StatsigManualValue = ""
 	}
 	next.Provider.Web.MediaConcurrency = input.ProviderWeb.MediaConcurrency

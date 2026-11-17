@@ -194,7 +194,7 @@ docker compose logs -f grok2api
 | `docker-compose.yml` | 仅 Grok2API 主程序 | `docker compose up -d` |
 | `docker-compose.warp.yml` | Grok2API + WARP | `docker compose -f docker-compose.warp.yml up -d` |
 | `docker-compose.warp-flaresolverr.yml` | Grok2API + WARP + FlareSolverr | `docker compose -f docker-compose.warp-flaresolverr.yml up -d` |
-| `docker-compose.all.yml` | Grok2API + WARP + FlareSolverr + Statsig signer | `docker compose -f docker-compose.all.yml up -d` |
+| `docker-compose.all.yml` | Grok2API + WARP + FlareSolverr，可选旧版 Statsig signer | `docker compose -f docker-compose.all.yml up -d` |
 | `docker-compose.statsig-signer.yml` | 公共 Statsig signer + FlareSolverr，不启动 Grok2API | `docker compose -f docker-compose.statsig-signer.yml up -d` |
 | `docker-compose.seed-hex-catch.yml` | 内置 FlareSolverr 的 SVG seed/HEX 采集与边缘签名服务 | `docker compose -f docker-compose.seed-hex-catch.yml up -d` |
 
@@ -413,9 +413,19 @@ docker compose --profile quality-guard up -d --build
 
 ### 实验性自托管 Statsig 签名器
 
-仓库包含一个 Playwright 驱动的实验性 Statsig 签名服务。它使用真实 Grok 页面校准 `seed/HEX`，通过浏览器样本校验后再提供兼容的 `/sign` 接口：
+主程序默认禁用旧版 `x-statsig-id` 签名，无需启动签名或 Material 服务。已有部署在管理端
+**设置 → Grok Web → 旧签名兼容 → 禁用（推荐）**，保存后立即生效；升级会保留原来的签名模式，
+不会自动覆盖已有配置。禁用后跳过签名预热、verification meta 与 seed/HEX 获取，也不再因旧签名未就绪
+将 Web 标记为降级。SSO 和 Cloudflare Clearance 按原来的设置使用。
 
-`seed-hex-catch` 使用当前浏览器采集的 seed/HEX，同时提供兼容的 `/sign` 接口和 `/material` 接口。当前材料没有过期时间，每次成功采集后原子替换。
+2026-11-16 已验证 Fast 聊天和额度查询无需旧签名；当前首页未暴露旧 seed/HEX 材料，
+采集服务可能持续未就绪。详见 [线上调查](seed-hex-catch/SIGN_RESEARCH.zh-CN.md)。
+
+URL、Local、手动模式保留为旧接口兼容选项。仓库的 Playwright 签名服务需要从仍产生旧签名的
+页面校准 `seed/HEX`，校验浏览器样本后才提供 `/sign`。仅需兼容该流程时再运行以下服务。
+
+`seed-hex-catch` 同时提供 `/sign` 和 `/material`。成功采集的材料没有过期时间，
+每次成功刷新后原子替换；首次完整采集前返回 503。
 
 如需运行独立 SVG 采集服务，并将 FlareSolverr 打包在同一镜像内：
 
@@ -429,7 +439,14 @@ docker compose -f docker-compose.seed-hex-catch.yml up -d
 docker compose -f docker-compose.all.yml up -d
 ```
 
-该版本会同时启动 Grok2API、WARP、FlareSolverr 和已发布的 signer 镜像。signer 先从 FlareSolverr 获取匹配的 Cookie 和 User-Agent，再由 Playwright 完成 Statsig 捕获。随后在管理端将 Statsig 模式设为 `URL`，地址填写 `http://statsig-signer:8787/sign`。
+该命令启动 Grok2API、WARP 和 FlareSolverr。旧签名器需显式启用：
+
+```bash
+docker compose -f docker-compose.all.yml --profile legacy-statsig up -d
+```
+
+signer 先从 FlareSolverr 获取匹配的 Cookie 和 User-Agent，再由 Playwright 捕获旧签名。
+成功就绪后，可以将签名模式设为 `URL`，地址填写 `http://statsig-signer:8787/sign`。
 
 只运行 signer 并作为公共服务提供：
 

@@ -92,7 +92,11 @@ jobs:
 
       - name: Test seed-hex-catch
         working-directory: seed-hex-catch
-        run: npm ci && npm test
+        shell: bash
+        run: |
+          npm ci
+          browser_path=$(node -e "const { chromium } = require('playwright'); process.stdout.write(chromium.executablePath())")
+          CATCH_TEST_BROWSER="$browser_path" npm test
 
   check_ghcr_image:
     name: Build ${{ matrix.image }} image (${{ matrix.arch }})

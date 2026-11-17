@@ -11,8 +11,10 @@ import (
 
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
+	"github.com/chenyme/grok2api/backend/internal/infra/config"
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	webprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/web"
 )
 
 func TestReadinessStartupReportDoesNotExposeInternalErrors(t *testing.T) {
@@ -25,6 +27,61 @@ func TestReadinessStartupReportDoesNotExposeInternalErrors(t *testing.T) {
 	}
 	if strings.Contains(string(payload), "private-host") || !strings.Contains(string(payload), `"errorCount":1`) {
 		t.Fatalf("public readiness leaked internal error: %s", payload)
+	}
+}
+
+func TestDisabledStatsigNeedsNoAccountRepositoryOrWarmup(t *testing.T) {
+	state := newStartupState(0)
+	state.setStatsigMode(config.StatsigModeURL)
+	state.setStatsigWarmup("warming", "in flight", 0)
+	state.setStatsigMode(config.StatsigModeDisabled)
+	state.setStatsigWarmup("unavailable", "obsolete warmup failure", 0)
+	application := &Application{
+		startup: state,
+		web:     webprovider.NewAdapter(webprovider.Config{StatsigMode: config.StatsigModeDisabled}, nil, nil, nil, nil),
+	}
+	application.warmStatsig(context.Background())
+	_, _, _, component := state.snapshot()
+	if component.State != "disabled" {
+		t.Fatalf("statsig = %#v", component)
+	}
+}
+
+func TestReadinessKeepsWebReadyWhenStatsigIsDisabled(t *testing.T) {
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "unsigned-web.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	accounts := relational.NewAccountRepository(database)
+	models := relational.NewModelRepository(database)
+	credential, _, err := accounts.UpsertByIdentity(ctx, accountdomain.Credential{
+		Provider: accountdomain.ProviderWeb, AuthType: accountdomain.AuthTypeSSO,
+		Name: "unsigned-web", SourceKey: "unsigned-web", EncryptedAccessToken: "test-sso",
+		Enabled: true, AuthStatus: accountdomain.AuthStatusActive, MaxConcurrent: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := models.UpsertRoutes(ctx, []modeldomain.Route{{
+		PublicID: "grok-chat-fast", Provider: accountdomain.ProviderWeb, UpstreamModel: "grok-chat-fast",
+		Capability: modeldomain.CapabilityChat, Enabled: true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := models.ReplaceAccountCapabilities(ctx, credential.ID, []string{"grok-chat-fast"}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	state := newStartupState(0)
+	state.setPhase("running")
+	state.setStatsigMode(config.StatsigModeDisabled)
+	snapshot := readinessSnapshot(ctx, state, func(context.Context) error { return nil }, models, accounts, provider.NewRegistry(), nil)
+	if !snapshot.Ready || snapshot.State != "ready" || snapshot.Components["grok_web"].State != "ready" || snapshot.Components["statsig"].State != "disabled" {
+		t.Fatalf("readiness = %#v", snapshot)
 	}
 }
 

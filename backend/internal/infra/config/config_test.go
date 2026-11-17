@@ -631,6 +631,15 @@ func TestValidateStatsigModes(t *testing.T) {
 	base := defaultConfig()
 	base.Secrets.JWTSecret = "12345678901234567890123456789012"
 	base.Secrets.CredentialEncryptionKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	if base.Provider.Web.StatsigMode != StatsigModeDisabled {
+		t.Fatalf("default Statsig mode = %q, want disabled", base.Provider.Web.StatsigMode)
+	}
+	disabled := base
+	disabled.Provider.Web.StatsigSignerURL = ""
+	disabled.Provider.Web.StatsigMaterialURL = ""
+	if err := disabled.Validate(); err != nil {
+		t.Fatalf("disabled Statsig requires no signer or material: %v", err)
+	}
 
 	manual := base
 	manual.Provider.Web.StatsigMode = StatsigModeManual

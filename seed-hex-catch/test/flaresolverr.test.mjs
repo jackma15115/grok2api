@@ -26,3 +26,47 @@ test("accepts a successful no-challenge solution without cookies", async () => {
   assert.deepEqual(solution.cookies, []);
   assert.match(solution.userAgent, /Chrome\/148/);
 });
+
+test("preserves Selenium cookie attributes required by Chromium", async () => {
+  const cookies = [
+    {
+      name: "__Secure-authjs.callback-url", value: "https://grok.com/",
+      domain: ".grok.com", path: "/", secure: true, httpOnly: true,
+      sameSite: "Lax", expiry: 2_000_000_000,
+    },
+    {
+      name: "__Host-session", value: "fixture-session",
+      domain: "grok.com", path: "/", secure: true, httpOnly: true, sameSite: "None",
+    },
+    {
+      name: "scoped", value: " value with spaces ",
+      domain: ".grok.com", path: "/rest", secure: false, httpOnly: false, sameSite: "Strict",
+    },
+    { name: "empty", value: "" },
+  ];
+  const solution = await solveFlareSolverr({
+    baseURL: "http://flaresolverr:8191",
+    targetURL: "https://grok.com/",
+    fetchImpl: async () => new Response(JSON.stringify({
+      status: "ok",
+      solution: { userAgent: "fixture-agent", cookies },
+    })),
+  });
+
+  assert.deepEqual(solution.cookies, [
+    {
+      name: "__Secure-authjs.callback-url", value: "https://grok.com/",
+      domain: ".grok.com", path: "/", secure: true, httpOnly: true,
+      sameSite: "Lax", expires: 2_000_000_000,
+    },
+    {
+      name: "__Host-session", value: "fixture-session",
+      domain: "grok.com", path: "/", secure: true, httpOnly: true, sameSite: "None",
+    },
+    {
+      name: "scoped", value: " value with spaces ",
+      domain: ".grok.com", path: "/rest", secure: false, httpOnly: false, sameSite: "Strict",
+    },
+    { name: "empty", value: "", domain: "grok.com", path: "/", secure: false, httpOnly: false },
+  ]);
+});

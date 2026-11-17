@@ -10,6 +10,7 @@ import (
 	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
 	auditapp "github.com/chenyme/grok2api/backend/internal/application/audit"
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
+	"github.com/chenyme/grok2api/backend/internal/infra/config"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	httpserver "github.com/chenyme/grok2api/backend/internal/transport/http"
@@ -47,11 +48,12 @@ type startupReport struct {
 }
 
 type startupState struct {
-	mu        sync.RWMutex
-	phase     string
-	updatedAt time.Time
-	report    startupReport
-	statsig   httpserver.ReadinessComponent
+	mu          sync.RWMutex
+	phase       string
+	updatedAt   time.Time
+	report      startupReport
+	statsigMode string
+	statsig     httpserver.ReadinessComponent
 }
 
 func newStartupState(restoredQuotaRecoveries int) *startupState {
@@ -96,12 +98,44 @@ func (s *startupState) recordError(err error) {
 
 func (s *startupState) setStatsig(state, detail string, warmed int) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.setStatsigLocked(state, detail, warmed)
+}
+
+func (s *startupState) setStatsigLocked(state, detail string, warmed int) {
 	s.statsig = httpserver.ReadinessComponent{State: state, Detail: detail}
 	if warmed > 0 {
 		s.report.StatsigKeysWarmed = warmed
 	}
 	s.updatedAt = time.Now().UTC()
-	s.mu.Unlock()
+}
+
+func (s *startupState) setStatsigMode(mode string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if mode == s.statsigMode {
+		return
+	}
+	s.statsigMode = mode
+	switch mode {
+	case config.StatsigModeDisabled:
+		s.setStatsigLocked("disabled", "已禁用旧签名，无需签名或 Material 服务", 0)
+	case config.StatsigModeManual:
+		s.setStatsigLocked("warm", "使用手动旧签名，无需预热", 0)
+	case config.StatsigModeLocal:
+		s.setStatsigLocked("warm", "按需生成旧签名，无需预热", 0)
+	default:
+		s.setStatsigLocked("cold", "旧签名兼容模式等待预热", 0)
+	}
+}
+
+func (s *startupState) setStatsigWarmup(state, detail string, warmed int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// A warmup already in flight must not overwrite a newly disabled mode.
+	if s.statsigMode == config.StatsigModeURL {
+		s.setStatsigLocked(state, detail, warmed)
+	}
 }
 
 func (s *startupState) snapshot() (string, time.Time, startupReport, httpserver.ReadinessComponent) {
@@ -229,7 +263,7 @@ func readinessSnapshot(
 		}
 		snapshot.Components[name] = httpserver.ReadinessComponent{State: "unavailable", Detail: detail}
 	}
-	if required[accountdomain.ProviderWeb] && usable[accountdomain.ProviderWeb] && statsig.State != "warm" {
+	if required[accountdomain.ProviderWeb] && usable[accountdomain.ProviderWeb] && statsig.State != "warm" && statsig.State != "disabled" {
 		component := snapshot.Components[string(accountdomain.ProviderWeb)]
 		if statsig.State == "warming" || statsig.State == "cold" {
 			component.State = "warming"
@@ -357,24 +391,34 @@ func (a *Application) runStatsigWarmup(ctx context.Context) {
 			return
 		case <-timer.C:
 		}
-		a.startup.setStatsig("warming", "正在预热共享签名", 0)
-		values, err := a.accountRepo.ListEnabled(ctx, accountdomain.ProviderWeb)
-		if err == nil && len(values) == 0 {
-			a.startup.setStatsig("disabled", "没有启用的 Grok Web 账号", 0)
-		} else if err == nil {
-			warmCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			var warmed int
-			warmed, err = a.web.WarmStatsig(warmCtx, values[0])
-			cancel()
-			if err == nil {
-				a.startup.setStatsig("warm", "共享签名已预热", warmed)
-			}
-		}
-		if err != nil && ctx.Err() == nil {
-			a.logger.Warn("web_statsig_warmup_failed", "error", err)
-			a.startup.setStatsig("unavailable", "预热失败，将由请求按需重试", 0)
-		}
+		a.warmStatsig(ctx)
 		resetTimer(timer, statsigWarmupInterval)
+	}
+}
+
+func (a *Application) warmStatsig(ctx context.Context) {
+	mode := a.web.StatsigMode()
+	// Manual/local modes work on demand; disabled mode must not fetch accounts,
+	// verification metadata, signing material, or a remote signature.
+	if mode != config.StatsigModeURL {
+		return
+	}
+	a.startup.setStatsigWarmup("warming", "正在预热共享签名", 0)
+	values, err := a.accountRepo.ListEnabled(ctx, accountdomain.ProviderWeb)
+	if err == nil && len(values) == 0 {
+		a.startup.setStatsigWarmup("disabled", "没有启用的 Grok Web 账号", 0)
+	} else if err == nil {
+		warmCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		var warmed int
+		warmed, err = a.web.WarmStatsig(warmCtx, values[0])
+		cancel()
+		if err == nil {
+			a.startup.setStatsigWarmup("warm", "共享签名已预热", warmed)
+		}
+	}
+	if err != nil && ctx.Err() == nil && a.web.StatsigMode() == config.StatsigModeURL {
+		a.logger.Warn("web_statsig_warmup_failed", "error", err)
+		a.startup.setStatsigWarmup("unavailable", "预热失败，将由请求按需重试", 0)
 	}
 }
 

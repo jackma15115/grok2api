@@ -1,0 +1,433 @@
+{
+  "observedOnUTC": "2026-11-16",
+  "frontendSessionStartedAt": "2026-11-16T09:54:09.438Z",
+  "origin": "https://grok.com",
+  "scope": {
+    "authenticated": true,
+    "egress": "disposable SSH test host",
+    "pages": [
+      {
+        "requestedPath": "/",
+        "finalPath": "/",
+        "httpStatus": 200,
+        "title": "Grok",
+        "verification": [
+          {
+            "name": "grok-site-verification",
+            "content": null
+          },
+          {
+            "name": "twitter-site-verification",
+            "content": null
+          }
+        ],
+        "oldSVGCount": 0,
+        "rawHTML": {
+          "bytes": 174529,
+          "grokVerification": false,
+          "twitterVerification": false,
+          "oldSVG": false,
+          "statsigHeader": false
+        },
+        "matchingDigestInputCount": 0
+      },
+      {
+        "requestedPath": "/imagine",
+        "finalPath": "/",
+        "httpStatus": 200,
+        "title": "Grok",
+        "verification": [
+          {
+            "name": "grok-site-verification",
+            "content": null
+          },
+          {
+            "name": "twitter-site-verification",
+            "content": null
+          }
+        ],
+        "oldSVGCount": 0,
+        "rawHTML": {
+          "bytes": 176935,
+          "grokVerification": false,
+          "twitterVerification": false,
+          "oldSVG": false,
+          "statsigHeader": false
+        },
+        "matchingDigestInputCount": 0
+      }
+    ],
+    "mediaGenerationPerformed": false,
+    "accountSettingsChanged": false
+  },
+  "frontend": {
+    "resourceCount": 464,
+    "resourceBytes": 31340134,
+    "grokCDNResourceCount": 444,
+    "termCounts": {
+      "botoxSign": 0,
+      "obfiowerehiring": 0,
+      "x-statsig-id": 0,
+      "grok-site-verification": 0,
+      "loading-x-anim-": 0,
+      "x-xai-request-id": 2,
+      "/ws/mgw": 1,
+      "/rest/rate-limits": 2,
+      "quota_info": 2,
+      "conversations/new": 2,
+      "signRequest": 0
+    },
+    "sameOriginAPIRequestCount": 57,
+    "requestsWithXaiRequestID": 41,
+    "naturalStatsigRequestCount": 0,
+    "capturedMaterial": null,
+    "index": {
+      "status": 404,
+      "bytes": 155849,
+      "grokVerification": false,
+      "twitterVerification": false
+    },
+    "sourceExcerpts": [
+      {
+        "label": "REST middleware",
+        "url": "https://cdn.grok.com/_next/static/chunks/2s2ilh32gw41w.js",
+        "sourceOffsetCharacters": 81116,
+        "snippet": "let tU=async e=>{let t=crypto.randomUUID();e.init??={},e.init.headers??={};let i=e.init.headers;return tq(i,\"x-xai-request-id\",t),(0,n.h)((e,t)=>tq(i,e,t)),e},t_=async e=>{let t=e.response;if(t&&t.status>=200&&t.status<300)return t;let n=new f.$(t,\"Response returned an error code\"),i=await (0,a.K)(n);throw tM(i,t?.status??0),i};function tM(e,t){(0,a.Z)(e)&&e.wellKnownErrorSet.has(s.y)?l.f.getState().open():(0,o.a)(t)}let tO={basePath:\"u\"<typeof location?void 0:(0,i.P)()||location.origin,credentials:\"include\",fetchApi:r.d,middleware:[{pre:tU,post:t_}]},tD={get basePath(){return\"u\">typeof location&&(\"localhost\"===location.hostname||\"127.0.0.1\"===location.hostname)?location.origin:(0,t.y)(\"APP_DEPLOYER_URL\")?.replace(/\\/+$/,\"\")||void 0},credentials:\"include\",fetchApi:r.d,middleware:[{post:t_}"
+      },
+      {
+        "label": "organization header",
+        "url": "https://cdn.grok.com/_next/static/chunks/2s2ilh32gw41w.js",
+        "sourceOffsetCharacters": 893,
+        "snippet": "function d(e){let a=function(){let{session:e}=(0,n.K)(),a=(0,t.getQueryClient)().getQueryState(i.activeOrgId()),r=\"string\"==typeof a?.data?a.data:\"\";return function({signedIn:e,cookiePending:t,cookieOrgId:n,teamOrganizationId:i,mappedOrganizationId:a,memberships:r}){if(e&&!t){if(r&&r.length>0){var o;let e;return o=r.filter(e=>!l(e.organizationKind)),(e=new Set(o.map(e=>e.organizationId))).has(n)?n:i&&e.has(i)?i:o.find(e=>!l(e.organizationKind))?.organizationId}return s(n,i,a)}}({signedIn:!!e?.user,cookiePending:null==a||\"pending\"===a.status,cookieOrgId:r,teamOrganizationId:e?.team?.organizationId,mappedOrganizationId:e?.mappedOrganizationId})}();a&&e(\"x-acting-organization-id\",a)}e.s([\"R\",0,"
+      },
+      {
+        "label": "signedTeamsFetch",
+        "url": "https://cdn.grok.com/_next/static/chunks/228w6eu5uqadr.js",
+        "sourceOffsetCharacters": 519,
+        "snippet": "async function o(e,o){let d=new Headers(o.headers);d.set(\"x-xai-request-id\",crypto.randomUUID()),(0,t.h)((e,t)=>d.set(e,t));let s=await (0,l.d)((0,r.o)(e),{...o,credentials:\"include\",headers:d});if(s.status>=200&&s.status<300)return s;let i=await (0,n.K)(new u.$(s,\"Response returned an error code\"));throw(0,a.surfaceResponseError)(i,s.status),i}e.s([\"signedTeamsFetch\",0,o])},5371657,(e,t,r)=>{Object.defineProperty(r,\"__esModule\",{value:!0}),Object.defineProperty(r,\"useRouterBFCache\",{enumerable:!0,get:function(){return l}});let n=e.r(8921314);function l(e,t,r){let[l,a]=(0,n.useState)(()=>({tre"
+      },
+      {
+        "label": "fetchAndRecord4xx5xx",
+        "url": "https://cdn.grok.com/_next/static/chunks/42a21lpkdlv24.js",
+        "sourceOffsetCharacters": 16334,
+        "snippet": "e.s([\"d\",0,function e(i,s){let l=s?.method||\"GET\",d=\"string\"==typeof i?i:i instanceof URL?i.href:i.url,y=h(l,d);(0,u.d)(\"fetchAndRecord4xx5xx\",{type:\"client_fetch_start\",endpoint:y});let m=Date.now();return(0,t.C)(i,s).then(async e=>403===e.status&&\"challenge\"===e.headers.get(\"cf-mitigated\")?n().then(o).then(e=>{if(!e)throw Error(\"Failed to validate turnstile token\")}).catch(e=>{throw e.errorSource=\"cloudflare\",e}).then(()=>(m=Date.now(),(0,t.C)(i,s))):e).then(async t=>{if(t.status>=400){let i=await t.clone().text().then(e=>{try{return JSON.parse(e)}catch{return e}}),n=Error(JSON.stringify(i.error?.message||i.error||i));n.name=`HttpError ${t.status}`,Error.captureStackTrace(n,e),(0,r.y)(n,{tags:{endpoint:y,route:c(y),source:\"api\",loc:\"fetchAndRecord4xx5xx\",...function(e){return{status_class:a[Math.floor(e/100)-1],reason:401===e?\"auth\":403===e?\"permission\":\"unexpected\"}}(t.status)},extra:{status:t.status,statusText:t.statusText,url:d,method:l,reqBody:f(s?.body),body:p(i)}}),(0,u.d)(\"fetchAndRecord4xx5xx\",{type:\"client_fetch_error\",endpoint:y,errorCode:t.status.toString(),source:\"api\"})}else(0,u.d)(\"fetchAndRecord4xx5xx\",{type:\"client_fetch_success\",endpoint:y,latencyMs:Date.now()-m});return t}).catch(e=>{throw s?.signal?.aborted!==!0&&e?.name!==\"AbortError\"&&(\"cloudflare\"!==e.errorSource&&(0,r.y)(e,{tags:{endpoint:y,route:c(y),source:\"api\",loc:\"fetchAndRecord4xx5xx\",reason:\"network\"},extra:{url:d,method:l,reqBody:f(s?.body)}}),(0,u.d)(\"fetchAndRecord4xx5xx\",{type:\"client_fetch_error\",endpoint:y,errorCode:\"unknown\",source:e.errorSource??\"api\"})),e})},\"g\",0,function e(t,i){if(t&&t.error){let s=i?.url??\"unknown\",n=h(\"POST\",s),o=Error(t.error.message||t.error);o.name=\"StreamEr"
+      },
+      {
+        "label": "native fetch wrapper",
+        "url": "https://cdn.grok.com/_next/static/chunks/0j8t7vab2mmt6.js",
+        "sourceOffsetCharacters": 415,
+        "snippet": ",572671,e=>{let t=async(...e)=>{let t,s,[r]=e,a=await globalThis.fetch(...e),i=function(e){try{if(e instanceof URL)return e;if(\"string\"==typeof e)return new URL(e,globalThis.location?.href);if(e instanceof Request)return new URL(e.url)}catch{}return null}(r);return i?.hostname===\"assets.grokusercontent.com\"&&401===a.status&&(t=new URLSearchParams({return_to:globalThis.location.pathname+globalThis.location.search}),s=`/sign-in?${t.toString()}`,globalThis.location.href=s),a};function s(e){if(!e)return!1;try{let t=new URL(e).hostname;return t.endsWith(\".blob.core.windows.net\")||t.endsWith(\".blob.core.usgovcloudapi.net\")}catch{return!1}}function "
+      },
+      {
+        "label": "Gateway URL",
+        "url": "https://cdn.grok.com/_next/static/chunks/2ue3e31_kabcx.js",
+        "sourceOffsetCharacters": 415,
+        "snippet": ",994814,e=>{var t=e.i(1254211),n=e.i(5156912),a=e.i(7778238);e.i(7009093);let s=\"/ws/mgw/\";function i(e,t){if(!t)return e;let n=e.includes(\"?\")?\"&\":\"?\";return`${e}${n}uid=${encodeURIComponent(t)}`}let r=new Set([\"grok-web-atla.mouseion.dev\"]);function o(e,n){if(n)return n;{if((0,t.P)())return(0,t.t)(e);let n=window.location.host;if(n.includes(\"mouseion.dev\")&&!r.has(n))return`wss://grok-api.gcp.mouseion.dev${e}`;let a=\"https:\"===window.location.protocol?\"wss\":\"ws\";return`${a}://${n}${e}`}}e.s([\"O\",0,r,\"C\",0,function(){var e;return e=(0,n.K)().session?.user?.userId,i(o(a.a),e)},\"E\",0,function(){var e,t;return e=void 0,t=(0,n.K)().session?.user?.userId,i(o(s,e),t)},\"F\",0,function(){return new URL(o(s)).host}],994814)},511070,8685681,8455226,4641031,5225866,7580077,1834782,7222101,145929,e=>{var t=e.i(5148853),n=e.i(9415910),a=e.i(3302165),s=e.i(2527181),i=e.i(3711414),r=e.i(1748617);function o(e,n,a){let s=(0,t.H)({agentId:e,avatarColor:n??null,avatarShape:a??null});return{color:s.color,"
+      },
+      {
+        "label": "REST chat request",
+        "url": "https://cdn.grok.com/_next/static/chunks/217fe-29o2dz7.js",
+        "sourceOffsetCharacters": 24443,
+        "snippet": "async chatCreateConversationAndRespondRaw(e,t){if(null==e.body)throw new n.w(\"body\",'Required parameter \"body\" was null or undefined when calling chatCreateConversationAndRespond().');let o={};o[\"Content-Type\"]=\"application/json\";let i=await this.request({path:\"/rest/app-chat/conversations/new\",method:\"POST\",headers:o,query:{},body:function(e,n=!1){return null==e?e:{systemPromptName:e.systemPromptName,temporary:e.temporary,modelName:e.modelName,message:e.message,fileAttachments:e.fileAttachments,imageAttachments:e.imageAttachments,disableSearch:e.disableSearch,enableImageGeneration:e.enableImageGeneration,returnImageBytes:e.returnImageBytes,returnRawGrokInXaiRequest:e.returnRawGrokInXaiRequest,enableImageStreaming:e.enableImageStreaming,imageGenerationCount:e.imageGenerationCount,forceConcise:e.forceConcise,toolOverrides:(0,g.i)(e.toolOverrides),enableSideBySide:e.enableSideBySide,sendFinalMetadata:e.sendFinalMetadata,customInstructions:e.customInstructions,customPersonality:e.customPersonality,deepsearchPreset:e.deepsearchPreset,imageEditUri:e.imageEditUri,isReasoning:e.isReasoning,webpageUrls:e.webpageUrls,imageEditUris:e.imageEditUris,workspaceIds:e.workspaceIds,disableTextFollowUps:e.disableTextFollowUps,disableArtifact:e.disableArtifact,responseMetadata:e.responseMetadata,disableArtifactDiff:e.disableArtifactDiff,doForceTriggerArtifact:e.doForceTriggerArtifact,isFromGrokFiles:e.isFromGrokFiles,selectedFileTextContent:e.selectedFileTextContent,selectedFileTextContentStartPosition:e.selectedFileTextContentStartPosition,selectedFileTextContentEndPosition:e.selectedFileTextContentEndPosition,disableMemory:e.disableMemory,forceSideBySide:e.forceSideBySide,modelsUserCanUse"
+      },
+      {
+        "label": "REST chat caller",
+        "url": "https://cdn.grok.com/_next/static/chunks/36a_hqvi5gr60.js",
+        "sourceOffsetCharacters": 254613,
+        "snippet": "A.chatApi.chatCreateConversationAndRespondRaw({body:eU}).then(async e=>{for await(let t of(eS(ec,k),(0,g.d)(\"streamCreateAndRespond\",{type:\"send_query_stream_start\",...eP}),eL(),(0,_.processChunks)(e.raw))){if(eJ(),eY(),t.error){if(t.error.typedError||t.error.typed_error||t.error.toolCallFailed||t.error.tool_call_failed){if(!ex(ec,t.error)){let e=new I.Z(t.error);throw x(e),e}continue}let e=Error(t.error.message);throw x(e),e}if(t.result?.response?.error){if(!ex(ec,t.result.response.error)){let e=new I.Z(t.result.response.error);throw x(e),e}continue}if(!t.result)continue;let{response:e,conver"
+      },
+      {
+        "label": "media REST caller",
+        "url": "https://cdn.grok.com/_next/static/chunks/2wkh28spx3a2d.js",
+        "sourceOffsetCharacters": 61027,
+        "snippet": "l.chatApi.chatCreateConversationAndRespondRaw({body:{...e.body,kind:m.b.ConversationKindImagine,enableImageStreaming:!0,...(0,i.l)(),...o}});if(429===t.status){let e=await ee(t);return r&&G(r),{status:\"rate-limited\",...e}}let s=\"add-response\"===e.kind?K(t):N(t);return{status:\"ok\",chunks:r?X(s,r):s}}catch(e){throw r&&G(r),e}}async function Q(e){try{await l.chatApi.chatStopInflightResponse({responseId:e})}catch(e){(0,s.W)(\"media-store-v2:stopAbandonedResponse\",e)}}function Z(e){let t=e.toLowerCase();return t.includes(\"is under heavy usage right now\")||t.includes(\"under heavy load\")}let J=j.z.object({reason:W.z.string().optional(),peak_hours_sta"
+      }
+    ]
+  },
+  "quotaComparison": {
+    "session": "One authenticated browser context for all nine probes",
+    "provenance": "Exact response JSON recorded from probe stdout; no raw cookies or account identity retained",
+    "signatureModes": {
+      "absent": "x-statsig-id omitted",
+      "invalid": "invalid-research-signature",
+      "builtin-legacy": "Fresh timestamp generated by src/statsig.mjs using backend built-in seed/HEX; not freshly captured"
+    },
+    "results": [
+      {
+        "method": "POST",
+        "path": "/rest/rate-limits",
+        "body": {
+          "modelName": "fast"
+        },
+        "mode": "absent",
+        "httpStatus": 200,
+        "contentType": "application/json",
+        "response": {
+          "windowSizeSeconds": 86400,
+          "lowEffortRateLimits": null,
+          "highEffortRateLimits": null,
+          "remainingQueries": 29,
+          "totalQueries": 30
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/rest/rate-limits",
+        "body": {
+          "modelName": "fast"
+        },
+        "mode": "invalid",
+        "httpStatus": 200,
+        "contentType": "application/json",
+        "response": {
+          "windowSizeSeconds": 86400,
+          "lowEffortRateLimits": null,
+          "highEffortRateLimits": null,
+          "remainingQueries": 29,
+          "totalQueries": 30
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/rest/rate-limits",
+        "body": {
+          "modelName": "fast"
+        },
+        "mode": "builtin-legacy",
+        "httpStatus": 200,
+        "contentType": "application/json",
+        "response": {
+          "windowSizeSeconds": 86400,
+          "lowEffortRateLimits": null,
+          "highEffortRateLimits": null,
+          "remainingQueries": 29,
+          "totalQueries": 30
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/rest/rate-limits",
+        "body": {
+          "modelName": "auto"
+        },
+        "mode": "absent",
+        "httpStatus": 200,
+        "contentType": "application/json",
+        "response": {
+          "windowSizeSeconds": 86400,
+          "lowEffortRateLimits": null,
+          "highEffortRateLimits": null,
+          "remainingQueries": 7,
+          "totalQueries": 7
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/rest/rate-limits",
+        "body": {
+          "modelName": "auto"
+        },
+        "mode": "invalid",
+        "httpStatus": 200,
+        "contentType": "application/json",
+        "response": {
+          "windowSizeSeconds": 86400,
+          "lowEffortRateLimits": null,
+          "highEffortRateLimits": null,
+          "remainingQueries": 7,
+          "totalQueries": 7
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/rest/rate-limits",
+        "body": {
+          "modelName": "auto"
+        },
+        "mode": "builtin-legacy",
+        "httpStatus": 200,
+        "contentType": "application/json",
+        "response": {
+          "windowSizeSeconds": 86400,
+          "lowEffortRateLimits": null,
+          "highEffortRateLimits": null,
+          "remainingQueries": 7,
+          "totalQueries": 7
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/rest/media/imagine/quota_info",
+        "body": {},
+        "mode": "absent",
+        "httpStatus": 200,
+        "contentType": "application/json",
+        "response": {
+          "image": null,
+          "imagePro": {
+            "available": false,
+            "remainingQueries": 0,
+            "windowSizeSeconds": 86400
+          },
+          "imageEdit": null,
+          "video": null,
+          "video720p": {
+            "available": false,
+            "remainingQueries": 0,
+            "windowSizeSeconds": 86400
+          },
+          "maxVideoDurationSeconds": 15
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/rest/media/imagine/quota_info",
+        "body": {},
+        "mode": "invalid",
+        "httpStatus": 200,
+        "contentType": "application/json",
+        "response": {
+          "image": null,
+          "imagePro": {
+            "available": false,
+            "remainingQueries": 0,
+            "windowSizeSeconds": 86400
+          },
+          "imageEdit": null,
+          "video": null,
+          "video720p": {
+            "available": false,
+            "remainingQueries": 0,
+            "windowSizeSeconds": 86400
+          },
+          "maxVideoDurationSeconds": 15
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/rest/media/imagine/quota_info",
+        "body": {},
+        "mode": "builtin-legacy",
+        "httpStatus": 200,
+        "contentType": "application/json",
+        "response": {
+          "image": null,
+          "imagePro": {
+            "available": false,
+            "remainingQueries": 0,
+            "windowSizeSeconds": 86400
+          },
+          "imageEdit": null,
+          "video": null,
+          "video720p": {
+            "available": false,
+            "remainingQueries": 0,
+            "windowSizeSeconds": 86400
+          },
+          "maxVideoDurationSeconds": 15
+        }
+      }
+    ]
+  },
+  "restFastChat": {
+    "observedAt": "2026-11-16T10:01:14.590Z",
+    "session": {
+      "status": 200,
+      "authenticated": true,
+      "hasUserId": true,
+      "topKeys": [
+        "status",
+        "session"
+      ]
+    },
+    "path": "/rest/app-chat/conversations/new",
+    "method": "POST",
+    "body": {
+      "modelName": "grok-3",
+      "modelMode": "MODEL_MODE_FAST",
+      "message": "HI",
+      "temporary": true,
+      "disableSearch": true,
+      "enableImageGeneration": false,
+      "sendFinalMetadata": true,
+      "disableMemory": true,
+      "disablePersonalization": true
+    },
+    "mode": "absent",
+    "status": 200,
+    "contentType": "application/json",
+    "bytes": 6400,
+    "jsonLines": 21,
+    "responseKeys": [
+      "userResponse",
+      "isThinking",
+      "isSoftStop",
+      "responseId",
+      "uiLayout",
+      "llmInfo",
+      "token",
+      "messageTag",
+      "messageStepId",
+      "finalMetadata",
+      "modelResponse"
+    ],
+    "assistant": "Hi! How can I help you today?",
+    "error": null,
+    "challenge": null,
+    "requestHeaders": [
+      ":authority",
+      ":method",
+      ":path",
+      ":scheme",
+      "accept",
+      "accept-encoding",
+      "accept-language",
+      "baggage",
+      "content-length",
+      "content-type",
+      "cookie",
+      "origin",
+      "priority",
+      "referer",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile",
+      "sec-ch-ua-platform",
+      "sec-fetch-dest",
+      "sec-fetch-mode",
+      "sec-fetch-site",
+      "sentry-trace",
+      "user-agent",
+      "x-xai-request-id"
+    ],
+    "sentStatsig": false
+  },
+  "priorGatewayChat": {
+    "provenance": "Earlier completed test in this conversation",
+    "path": "/ws/mgw/",
+    "model": "fast",
+    "prompt": "HI",
+    "sentStatsig": false,
+    "messageSent": true,
+    "completed": true,
+    "assistant": "Hi! How can I help you today?"
+  },
+  "acceptance": {
+    "liveBrowserMaterialCaptured": false,
+    "signUsingLiveCapturedMaterialVerified": false,
+    "restFastChatWithoutStatsigCompleted": true,
+    "gatewayFastChatWithoutStatsigCompleted": true,
+    "collectorFixtureTests": {
+      "passed": 23,
+      "failed": 0,
+      "skipped": 0,
+      "browser": "Local Google Chrome, Playwright 1.61.1"
+    },
+    "fullCaptureThenSignThenChat": "not passed"
+  },
+  "limitations": [
+    "One authorized account and test egress; loaded frontend paths only",
+    "Imagine entry returned HTML then navigated to /; no image or video generation",
+    "No account mutation endpoints exercised",
+    "No absence-based claim about all unobserved server endpoints"
+  ]
+}

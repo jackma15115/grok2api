@@ -206,7 +206,7 @@ Six Compose variants are provided:
 | `docker-compose.yml` | Grok2API only | `docker compose up -d` |
 | `docker-compose.warp.yml` | Grok2API + WARP | `docker compose -f docker-compose.warp.yml up -d` |
 | `docker-compose.warp-flaresolverr.yml` | Grok2API + WARP + FlareSolverr | `docker compose -f docker-compose.warp-flaresolverr.yml up -d` |
-| `docker-compose.all.yml` | Grok2API + WARP + FlareSolverr + Statsig signer | `docker compose -f docker-compose.all.yml up -d` |
+| `docker-compose.all.yml` | Grok2API + WARP + FlareSolverr, with an optional legacy Statsig signer | `docker compose -f docker-compose.all.yml up -d` |
 | `docker-compose.statsig-signer.yml` | Public Statsig signer + FlareSolverr, without Grok2API | `docker compose -f docker-compose.statsig-signer.yml up -d` |
 | `docker-compose.seed-hex-catch.yml` | SVG seed/HEX collector and edge signer with embedded FlareSolverr | `docker compose -f docker-compose.seed-hex-catch.yml up -d` |
 
@@ -452,9 +452,22 @@ linked guide before enabling automatic quarantine.
 
 ### Experimental self-hosted Statsig signer
 
-The repository includes a Playwright-backed experimental Statsig signer. It calibrates against a real Grok page, verifies a browser-generated sample, and then exposes a compatible `/sign` endpoint:
+Legacy `x-statsig-id` signing is disabled by default. Grok2API runs without a signer or material service.
+For an existing deployment, select **Settings → Grok Web → Legacy signing → Disabled (recommended)**
+and save to apply immediately. Upgrades preserve your existing signing mode. Disabled mode skips signing
+warmup, verification metadata, and seed/HEX retrieval; missing legacy material no longer degrades Web
+readiness. SSO and Cloudflare Clearance continue to use their configured settings.
 
-`seed-hex-catch` exposes its current browser-captured seed/HEX through both a compatible `/sign` endpoint and a `/material` endpoint. The current pair has no expiry and is atomically replaced after each successful capture.
+Live tests on 2026-11-16 confirmed that Fast chat and quota queries work without legacy signing.
+The current homepage did not expose the old seed/HEX material, so a collector can remain unready.
+See the [live investigation](seed-hex-catch/SIGN_RESEARCH.zh-CN.md).
+
+URL, Local, and Manual modes remain available for legacy compatibility. The experimental Playwright
+signer needs a page that still produces legacy signatures to capture and verify seed/HEX before serving
+`/sign`. Run the services below when you need that workflow.
+
+`seed-hex-catch` exposes both `/sign` and `/material`. Captured material has no expiry and is atomically
+replaced after each successful refresh; both endpoints return 503 before the first complete capture.
 
 To run the standalone SVG collector, including FlareSolverr in the same image:
 
@@ -468,7 +481,14 @@ When both containers share a network, either select `URL` mode with `http://seed
 docker compose -f docker-compose.all.yml up -d
 ```
 
-This variant starts Grok2API, WARP, FlareSolverr, and the published signer image. The signer obtains matching cookies and User-Agent from FlareSolverr before Playwright performs the Statsig capture. Set the Statsig mode to `URL` and use `http://statsig-signer:8787/sign`.
+This command starts Grok2API, WARP, and FlareSolverr. Enable the legacy signer explicitly:
+
+```bash
+docker compose -f docker-compose.all.yml --profile legacy-statsig up -d
+```
+
+The signer obtains matching cookies and User-Agent from FlareSolverr before Playwright captures a legacy
+signature. Once ready, select `URL` mode and use `http://statsig-signer:8787/sign`.
 
 To run only the signer as a public service:
 

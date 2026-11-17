@@ -1,0 +1,38 @@
+{
+  "date": "2026-11-17",
+  "subject": "Main Go Web adapter without legacy signing services",
+  "configuration": {
+    "statsigMode": "disabled",
+    "signerServiceRunning": false,
+    "materialServiceRunning": false,
+    "clearanceMode": "flaresolverr",
+    "authenticationInput": "temporary standard input"
+  },
+  "test": "TestLiveWebQuotaAndFastChat",
+  "attempts": [
+    {
+      "result": "failed",
+      "quota": { "success": true, "mode": "auto", "remaining": 7, "total": 7 },
+      "chat": { "success": false, "stage": "Gateway identity resolution", "endpoint": "/api/auth/session", "httpStatus": 403 }
+    },
+    {
+      "result": "passed",
+      "quota": { "success": true, "mode": "auto", "remaining": 7, "total": 7 },
+      "chat": {
+        "success": true,
+        "method": "ForwardResponse",
+        "model": "grok-chat-fast",
+        "prompt": "HI",
+        "httpStatus": 200,
+        "assistantText": "Hi! How can I help you today?"
+      },
+      "elapsedSeconds": 40.83
+    }
+  ],
+  "intermediateSessionDiagnostics": [
+    { "requestHeaders": "session", "httpStatus": 200, "contentType": "application/json", "cloudflareChallengeDetected": false },
+    { "requestHeaders": "app", "httpStatus": 200, "contentType": "application/json", "cloudflareChallengeDetected": false }
+  ],
+  "firstFailureCause": "undetermined; no application code changed between attempts",
+  "legacyMaterialCapture": "incomplete"
+}

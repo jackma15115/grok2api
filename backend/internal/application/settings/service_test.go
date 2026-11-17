@@ -567,6 +567,58 @@ func TestStatsigMaterialURLIsPersistedForLocalMode(t *testing.T) {
 	}
 }
 
+func TestDisabledStatsigPersistsWithoutMaterialAndRestoresManualConfiguration(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Provider.Web.StatsigMode = config.StatsigModeManual
+	cfg.Provider.Web.StatsigManualValue = base64.RawStdEncoding.EncodeToString(make([]byte, 70))
+	cfg.Provider.Web.StatsigSignerURL = ""
+	cfg.Provider.Web.StatsigMaterialURL = ""
+	repository := &runtimeSettingsRepositoryStub{}
+	var applied config.Config
+	service := NewService(cfg, time.Time{}, 0, repository, nil, func(next config.Config) { applied = next })
+	input := service.Get().Config
+	input.ProviderWeb.StatsigMode = config.StatsigModeDisabled
+	snapshot, err := service.Update(context.Background(), service.Get().Revision, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Config.ProviderWeb.StatsigMode != config.StatsigModeDisabled || applied.Provider.Web.StatsigMode != config.StatsigModeDisabled {
+		t.Fatal("disabled mode was not applied")
+	}
+	if snapshot.Config.ProviderWeb.StatsigManualValue != "" || !snapshot.Config.ProviderWeb.StatsigManualConfigured {
+		t.Fatal("disabled mode did not keep the manual value write-only")
+	}
+	loaded, updatedAt, revision, err := LoadPersisted(context.Background(), cfg, repository)
+	if err != nil || loaded.Provider.Web.StatsigMode != config.StatsigModeDisabled {
+		t.Fatalf("reload mode=%q err=%v", loaded.Provider.Web.StatsigMode, err)
+	}
+	service = NewService(loaded, updatedAt, revision, repository, nil, nil)
+	input = service.Get().Config
+	input.ProviderWeb.StatsigMode = config.StatsigModeManual
+	if _, err := service.Update(context.Background(), service.Get().Revision, input); err != nil {
+		t.Fatal(err)
+	}
+	if repository.value.ProviderWeb.StatsigManualValue != cfg.Provider.Web.StatsigManualValue {
+		t.Fatal("switching back to manual lost the configured value")
+	}
+}
+
+func TestLoadPersistedPreservesLegacyStatsigModes(t *testing.T) {
+	for _, mode := range []string{config.StatsigModeURL, config.StatsigModeLocal, config.StatsigModeManual} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := testConfig(t)
+			value := toDomainConfig(cfg)
+			value.ProviderWeb.StatsigMode = mode
+			value.ProviderWeb.StatsigManualValue = base64.RawStdEncoding.EncodeToString(make([]byte, 70))
+			repository := &runtimeSettingsRepositoryStub{value: value, found: true}
+			loaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
+			if err != nil || loaded.Provider.Web.StatsigMode != mode {
+				t.Fatalf("legacy mode = %q, err = %v", loaded.Provider.Web.StatsigMode, err)
+			}
+		})
+	}
+}
+
 func TestLoadPersistedRejectsIncompleteStatsigPayload(t *testing.T) {
 	cfg := testConfig(t)
 	value := toDomainConfig(cfg)

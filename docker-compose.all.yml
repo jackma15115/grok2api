@@ -24,6 +24,7 @@ services:
       - no-new-privileges:true
 
   statsig-signer:
+    profiles: ["legacy-statsig"]
     container_name: statsig-signer
     image: "${STATSIG_SIGNER_IMAGE:-ghcr.io/jackma15115/grok2api-statsig-signer:latest}"
     depends_on:

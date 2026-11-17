@@ -25,6 +25,67 @@ import (
 
 const capturedWeeklyCreditsHex = "00000000630a610d0000304112001a00220c089abbccd2061080f2d1fc012a0c089ab0f1d2061080f2d1fc013a07080515000020413a070804150000803f3a020802421e0802120c089abbccd2061080f2d1fc011a0c089ab0f1d2061080f2d1fc01580162006801800000000f677270632d7374617475733a300d0a"
 
+func TestQuotaSyncWithoutSigningServices(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var quotaCalls, dependencyCalls atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.URL.Path != "/rest/rate-limits" && request.URL.Path != "/rest/media/imagine/quota_info" {
+					dependencyCalls.Add(1)
+					writer.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				quotaCalls.Add(1)
+				if request.Header.Get("x-statsig-id") != "" || request.Header.Get("x-xai-request-id") == "" {
+					t.Errorf("unexpected request identity headers: statsig=%q requestID=%q", request.Header.Get("x-statsig-id"), request.Header.Get("x-xai-request-id"))
+				}
+				writer.Header().Set("Content-Type", "application/json")
+				writer.WriteHeader(status)
+				if status == http.StatusForbidden {
+					_, _ = writer.Write([]byte(`{"code":7,"message":"permission denied"}`))
+				} else if request.URL.Path == "/rest/media/imagine/quota_info" {
+					_, _ = writer.Write([]byte(`{"image":null,"imagePro":{"available":true,"remainingQueries":10,"windowSizeSeconds":86400},"imageEdit":null,"video":null,"video720p":null}`))
+				} else {
+					_, _ = writer.Write([]byte(`{"windowSizeSeconds":86400,"remainingQueries":5,"totalQueries":7}`))
+				}
+			}))
+			defer server.Close()
+			cipher, err := security.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			encrypted, err := cipher.Encrypt("test-unsigned-sso")
+			if err != nil {
+				t.Fatal(err)
+			}
+			adapter := NewAdapter(Config{
+				BaseURL: server.URL, StatsigSignerURL: server.URL + "/sign", StatsigMaterialURL: server.URL + "/material",
+			}, infraegress.NewManager(egressRepositoryStub{}, cipher), cipher, nil, nil)
+			credential := account.Credential{ID: 7, Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, EncryptedAccessToken: encrypted}
+			window, err := adapter.SyncQuotaMode(context.Background(), credential, "fast")
+			if status == http.StatusForbidden {
+				if err == nil || quotaCalls.Load() != 1 {
+					t.Fatalf("forbidden quota: err=%v requests=%d, want one request", err, quotaCalls.Load())
+				}
+			} else {
+				if err != nil || window.Total != 7 || window.Remaining != 5 {
+					t.Fatalf("quota = %#v, err = %v", window, err)
+				}
+				snapshot, err := adapter.SyncQuotaGroup(context.Background(), credential, account.QuotaGroupWebImagine)
+				if err != nil || len(snapshot.Windows) == 0 {
+					t.Fatalf("Imagine quota = %#v, err = %v", snapshot, err)
+				}
+				if quotaCalls.Load() != 2 {
+					t.Fatalf("quota calls = %d, want 2", quotaCalls.Load())
+				}
+			}
+			if dependencyCalls.Load() != 0 {
+				t.Fatalf("made %d signing dependency requests", dependencyCalls.Load())
+			}
+		})
+	}
+}
+
 func TestParseCapturedWeeklyCreditsResponse(t *testing.T) {
 	body, err := hex.DecodeString(capturedWeeklyCreditsHex)
 	if err != nil {

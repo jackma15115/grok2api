@@ -65,7 +65,7 @@ func normalizedConfig(cfg Config) Config {
 		cfg.BaseURL = "https://grok.com"
 	}
 	if cfg.StatsigMode == "" {
-		cfg.StatsigMode = "url"
+		cfg.StatsigMode = statsigModeDisabled
 	}
 	if cfg.StatsigSignerURL == "" {
 		cfg.StatsigSignerURL = defaultStatsigSignerURL
@@ -108,6 +108,8 @@ func (a *Adapter) config() Config {
 	defer a.mu.RUnlock()
 	return a.cfg
 }
+
+func (a *Adapter) StatsigMode() string { return a.config().StatsigMode }
 
 func (a *Adapter) Provider() account.Provider { return account.ProviderWeb }
 

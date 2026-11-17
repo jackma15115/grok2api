@@ -406,6 +406,39 @@ func TestApplySignedStatsigUsesManualValue(t *testing.T) {
 	}
 }
 
+func TestDisabledStatsigSkipsAllSigningDependencies(t *testing.T) {
+	for _, mode := range []string{"", statsigModeDisabled} {
+		t.Run("mode="+mode, func(t *testing.T) {
+			adapter := NewAdapter(Config{
+				StatsigMode: mode, StatsigSignerURL: "https://unavailable.example/sign",
+				StatsigMaterialURL: "https://unavailable.example/material",
+				StatsigManualValue: base64.RawStdEncoding.EncodeToString(make([]byte, 70)),
+			}, nil, nil, nil, nil)
+			adapter.statsig.fetchMeta = func(context.Context, string, string, *infraegress.Lease) (string, error) {
+				t.Error("disabled mode fetched verification metadata")
+				return "", errors.New("metadata unavailable")
+			}
+			adapter.statsig.fetchMaterial = func(context.Context, string) (localStatsigMaterial, time.Time, error) {
+				t.Error("disabled mode fetched material")
+				return localStatsigMaterial{}, time.Time{}, errors.New("material unavailable")
+			}
+			request, _ := http.NewRequest(http.MethodPost, "https://grok.com/rest/rate-limits", nil)
+			request.Header.Set("x-statsig-id", "stale-signature")
+			request.Header.Set("x-xai-request-id", "request-id")
+			adapter.applySignedStatsig(context.Background(), request, "test-token", nil)
+			if request.Header.Get("x-statsig-id") != "" || request.Header.Get("x-xai-request-id") != "request-id" {
+				t.Fatalf("request headers = %v", request.Header)
+			}
+			if warmed, err := adapter.WarmStatsig(context.Background(), account.Credential{}); err != nil || warmed != 0 {
+				t.Fatalf("disabled warmup = %d, err = %v", warmed, err)
+			}
+			if adapter.invalidateSignedStatsig(http.MethodPost, request.URL.String()) {
+				t.Fatal("disabled mode requested a signature retry")
+			}
+		})
+	}
+}
+
 func TestApplySignedStatsigUsesLocalGenerator(t *testing.T) {
 	signer := newStatsigSigner()
 	adapter := &Adapter{cfg: Config{BaseURL: "https://grok.com", StatsigMode: statsigModeLocal}, statsig: signer}

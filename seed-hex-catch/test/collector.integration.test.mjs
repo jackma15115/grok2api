@@ -39,7 +39,7 @@ window.fetch = async function(input, init = {}) {
 };
 </script>`;
 
-test("collects material from a browser Statsig probe", { skip: !executablePath }, async () => {
+test("collects material with secure-prefixed FlareSolverr cookies and SSO", { skip: !executablePath }, async () => {
   const testSSO = "test-sso-token";
   let initialCookie = "";
   const server = http.createServer((request, response) => {
@@ -49,7 +49,10 @@ test("collects material from a browser Statsig probe", { skip: !executablePath }
         status: "ok",
         solution: {
           userAgent: "Mozilla/5.0 Chrome/148.0.0.0 Safari/537.36",
-          cookies: [],
+          cookies: [
+            { name: "__Secure-session", value: "secure-fixture", domain: "127.0.0.1", path: "/", secure: true, httpOnly: true, sameSite: "Lax" },
+            { name: "__Host-session", value: "host-fixture", domain: "127.0.0.1", path: "/", secure: true, httpOnly: true },
+          ],
         },
       }));
       return;
@@ -86,6 +89,8 @@ test("collects material from a browser Statsig probe", { skip: !executablePath }
     assert.equal(material.prefix, "");
     assert.equal(material.capturedMethod, "POST");
     assert.equal(material.capturedPath, "/rest/rate-limits");
+    assert.match(initialCookie, /(?:^|; )__Secure-session=secure-fixture(?:;|$)/);
+    assert.match(initialCookie, /(?:^|; )__Host-session=host-fixture(?:;|$)/);
     assert.match(initialCookie, /(?:^|; )sso=test-sso-token(?:;|$)/);
     assert.match(initialCookie, /(?:^|; )sso-rw=test-sso-token(?:;|$)/);
   } finally {
@@ -230,6 +235,59 @@ globalThis.TURBOPACK.push([document.currentScript, { otherChunks: [], runtimeMod
     assert.equal(material.hex, hex);
     assert.equal(material.capturedMethod, "POST");
     assert.equal(material.capturedPath, "/rest/rate-limits");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("discovers exports from every module in a current Turbopack chunk", { skip: !executablePath }, async () => {
+  const signerHTML = fixtureHTML
+    .replace("window.fetch = async function", "globalThis.fixtureSigner = async function")
+    .replace("return originalFetch(input, { ...init, headers });", "return headers.get('x-statsig-id');");
+  const runtimeHTML = `${signerHTML}<script>
+const chunks = [];
+chunks.push = function(entry) {
+  if (!entry[0]?.src) throw new Error('chunk script must have a source URL');
+  for (let index = 1; index < entry.length; index += 2) {
+    if (typeof entry[index] !== 'number' || typeof entry[index + 1] !== 'function') continue;
+    const module = { id: entry[index], exports: {} };
+    entry[index + 1]({ m: module, e: module.exports, i: () => ({}) });
+  }
+  return 1;
+};
+globalThis.TURBOPACK = chunks;
+const source = document.createElement('script');
+source.src = '/_next/static/chunks/fixture.js';
+chunks.push([source, 17, () => {}, 428992, (runtime) => {
+  runtime.e.botoxSign = (path, method) => globalThis.fixtureSigner(path, { method });
+}]);
+</script>`;
+  const server = http.createServer((request, response) => {
+    if (request.url === "/v1" && request.method === "POST") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: "ok", solution: { userAgent: "fixture-agent", cookies: [] } }));
+    } else if (request.url === "/") {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(runtimeHTML);
+    } else {
+      response.writeHead(204);
+      response.end();
+    }
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const targetURL = `http://127.0.0.1:${server.address().port}/`;
+    const collector = new SVGMaterialCollector({
+      targetURL, flareSolverrURL: targetURL, executablePath,
+      browserTimeoutMs: 2_000, pageSettleMs: 25,
+    });
+    const material = await collector.refresh();
+    assert.equal(collector.status().lastError, null);
+    assert.equal(material.seed, seedBase64);
+    assert.equal(material.hex, hex);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

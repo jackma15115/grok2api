@@ -2,6 +2,10 @@
 
 [English](README.md) | 简体中文
 
+主程序默认禁用旧签名，无需运行本服务。已有部署可在设置页将“旧签名兼容”设为“禁用（推荐）”。
+2026-11-16 的线上页面未暴露旧 seed/HEX；首次完整采集前，本服务保持未就绪并返回 503。
+详见 [调查记录](SIGN_RESEARCH.zh-CN.md)。本服务保留用于仍产生旧 Statsig 签名的页面。
+
 `seed-hex-catch` 会定期观察 Grok 真实的 Statsig 请求及其对应的 Web Crypto 摘要输入，
 经过校验后提取当前 seed 和 HEX，并使用当前浏览器采集的材料提供与
 `grok.wodf.de/sign` 兼容的签名接口。

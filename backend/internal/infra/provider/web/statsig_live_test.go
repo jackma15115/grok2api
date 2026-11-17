@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -17,17 +18,27 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
 )
 
-// TestLiveStatsigAcceptedByGrok is an opt-in upstream acceptance test. It
-// verifies that the configured Statsig implementation survives the complete
-// Grok Web request path instead of checking only the encoded value's shape.
-func TestLiveStatsigAcceptedByGrok(t *testing.T) {
+// TestLiveWebQuotaAndFastChat exercises the configured Web adapter against
+// Grok. Successful requests verify quota/chat behavior; they do not establish
+// that Grok validates an optional legacy signature.
+func TestLiveWebQuotaAndFastChat(t *testing.T) {
 	sso := strings.TrimSpace(os.Getenv("GROK_LIVE_SSO"))
+	if os.Getenv("GROK_LIVE_SSO_STDIN") == "1" {
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil && err != io.EOF {
+			t.Fatal("could not read SSO from stdin")
+		}
+		sso = strings.TrimSpace(line)
+	}
 	if sso == "" {
-		t.Skip("GROK_LIVE_SSO is not set")
+		t.Skip("no live SSO supplied")
 	}
 	mode := strings.ToLower(strings.TrimSpace(os.Getenv("GROK_LIVE_STATSIG_MODE")))
-	if mode != statsigModeLocal && mode != "signer" {
-		t.Skip("GROK_LIVE_STATSIG_MODE must be local or signer")
+	if mode == "" {
+		mode = statsigModeDisabled
+	}
+	if mode != statsigModeDisabled && mode != statsigModeLocal && mode != "signer" {
+		t.Skip("GROK_LIVE_STATSIG_MODE must be disabled, local, or signer")
 	}
 
 	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("GROK_LIVE_BASE_URL")), "/")
@@ -71,16 +82,16 @@ func TestLiveStatsigAcceptedByGrok(t *testing.T) {
 	adapter := NewAdapter(cfg, manager, cipher, nil, nil)
 	window, err := adapter.SyncQuotaMode(ctx, credential, "auto")
 	if err != nil {
-		t.Fatalf("%s Statsig was not accepted by Grok: %v", mode, err)
+		t.Fatalf("quota request failed with signing mode %s: %v", mode, err)
 	}
 	if window.Total <= 0 || window.Remaining < 0 || window.Remaining > window.Total {
-		t.Fatalf("%s Statsig returned an invalid quota window", mode)
+		t.Fatalf("invalid quota window with signing mode %s", mode)
 	}
-	t.Logf("%s Statsig accepted by Grok: remaining=%d total=%d", mode, window.Remaining, window.Total)
+	t.Logf("quota request succeeded with signing mode %s: remaining=%d total=%d", mode, window.Remaining, window.Total)
 
 	chatBody, err := json.Marshal(map[string]any{
 		"model":    "grok-chat-fast",
-		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+		"messages": []any{map[string]any{"role": "user", "content": "HI"}},
 		"stream":   false,
 	})
 	if err != nil {
@@ -91,15 +102,15 @@ func TestLiveStatsigAcceptedByGrok(t *testing.T) {
 		Model: "grok-chat-fast", Operation: "chat",
 	})
 	if err != nil {
-		t.Fatalf("%s Statsig chat request failed: %v", mode, err)
+		t.Fatalf("Fast chat request failed with signing mode %s: %v", mode, err)
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
-		t.Fatalf("%s Statsig chat response failed: %v", mode, err)
+		t.Fatalf("Fast chat response failed with signing mode %s: %v", mode, err)
 	}
 	if response.StatusCode != http.StatusOK {
-		t.Fatalf("%s Statsig chat returned HTTP %d: %s", mode, response.StatusCode, strings.TrimSpace(string(responseBody)))
+		t.Fatalf("Fast chat returned HTTP %d with signing mode %s", response.StatusCode, mode)
 	}
 	var result struct {
 		Choices []struct {
@@ -109,11 +120,11 @@ func TestLiveStatsigAcceptedByGrok(t *testing.T) {
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(responseBody, &result); err != nil || len(result.Choices) == 0 || strings.TrimSpace(result.Choices[0].Message.Content) == "" {
-		t.Fatalf("%s Statsig chat returned no assistant text", mode)
+		t.Fatalf("Fast chat returned no assistant text with signing mode %s", mode)
 	}
 	preview := []rune(strings.TrimSpace(result.Choices[0].Message.Content))
 	if len(preview) > 200 {
 		preview = preview[:200]
 	}
-	t.Logf("%s Statsig chat accepted by Grok: response=%q", mode, string(preview))
+	t.Logf("Fast chat completed with signing mode %s: response=%q", mode, string(preview))
 }

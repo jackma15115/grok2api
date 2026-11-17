@@ -22,6 +22,7 @@ import (
 
 const (
 	DatabaseURLEnv                = "GROK2API_DATABASE_URL"
+	StatsigModeDisabled           = "disabled"
 	StatsigModeManual             = "manual"
 	StatsigModeLocal              = "local"
 	StatsigModeURL                = "url"
@@ -618,6 +619,7 @@ func (c Config) Validate() error {
 		return errors.New("provider.web.baseURL 必须是无凭据的 HTTPS URL")
 	}
 	switch c.Provider.Web.StatsigMode {
+	case StatsigModeDisabled:
 	case StatsigModeManual:
 		if !validStatsigID(c.Provider.Web.StatsigManualValue) {
 			return errors.New("provider.web 手动 x-statsig-id 格式无效")
@@ -633,7 +635,7 @@ func (c Config) Validate() error {
 			return fmt.Errorf("provider.web Statsig 签名 URL 无效: %w", err)
 		}
 	default:
-		return errors.New("provider.web Statsig 模式必须是 manual、local 或 url")
+		return errors.New("provider.web Statsig 模式必须是 disabled、manual、local 或 url")
 	}
 	switch c.Provider.Web.ClearanceMode {
 	case ClearanceModeManual:
@@ -924,7 +926,7 @@ func defaultConfig() Config {
 				StreamIdleTimeout: Duration(settingsdomain.DefaultBuildStreamIdleTimeout),
 			},
 			Web: WebProviderConfig{
-				BaseURL: "https://grok.com", StatsigMode: StatsigModeURL, StatsigSignerURL: DefaultStatsigSignerURL,
+				BaseURL: "https://grok.com", StatsigMode: StatsigModeDisabled, StatsigSignerURL: DefaultStatsigSignerURL,
 				ClearanceMode: ClearanceModeManual, FlareSolverrURL: DefaultFlareSolverrURL,
 				ClearanceTimeout: Duration(time.Minute), ClearanceRefresh: Duration(10 * time.Minute),
 				QuotaTimeout: Duration(25 * time.Second),

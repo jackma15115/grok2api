@@ -125,7 +125,8 @@ export function SettingsPage() {
               <SettingsField controlId="web-statsig-mode" className="sm:col-span-2" label={t("settings.web.statsigMode")} description={statsigMode === "local" ? t("statsigLocalModeHelp") : t("settings.web.statsigModeHelp")} error={form.formState.errors.providerWeb?.statsigMode?.message}>
                 <Controller control={form.control} name="providerWeb.statsigMode" render={({ field }) => (
                   <Tabs value={field.value} onValueChange={field.onChange}>
-                    <TabsList id="web-statsig-mode" className="grid w-full grid-cols-3 bg-muted/55">
+                    <TabsList id="web-statsig-mode" className="grid h-auto w-full grid-cols-2 bg-muted/55 sm:grid-cols-4">
+                      <TabsTrigger value="disabled" className="font-normal">{t("statsigDisabledMode")}</TabsTrigger>
                       <TabsTrigger value="manual" className="font-normal">{t("settings.web.statsigManual")}</TabsTrigger>
                       <TabsTrigger value="local" className="font-normal">{t("statsigLocalMode")}</TabsTrigger>
                       <TabsTrigger value="url" className="font-normal">{t("settings.web.statsigURL")}</TabsTrigger>

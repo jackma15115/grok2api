@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { chromium } from "playwright";
 
+import { launchCaptureBrowser } from "./browser.mjs";
 import { solveFlareSolverr } from "./flaresolverr.mjs";
 import { computeStyleHEX, validateMaterial } from "./hex.mjs";
 import { currentMaterialStatus } from "./material.mjs";
@@ -70,6 +70,14 @@ function signedProbeScript() {
     const findSigner = (runtime, source) => {
       if (!runtime || typeof runtime.i !== "function") return;
       rememberRuntime(runtime);
+      for (const [name, module] of [["exports", runtime.e], ["module", runtime.m]]) {
+        const candidate = exportedSigner(module);
+        if (candidate) {
+          signer = candidate;
+          signerSource = `${source}:${name}`;
+          return;
+        }
+      }
       for (const [collectionName, collection] of [
         ["cache", runtime.c],
         ["module-cache", runtime.cache],
@@ -86,7 +94,7 @@ function signedProbeScript() {
       const moduleEntries = runtime.m instanceof Map ? runtime.m.entries() : Object.entries(runtime.m || {});
       for (const [id, factory] of moduleEntries) {
         let sourceText = "";
-        try { sourceText = Function.prototype.toString.call(factory); } catch (_) {}
+        try { sourceText = Function.prototype.toString.call(factory.__seedHexOriginalFactory || factory); } catch (_) {}
         if (!sourceText.includes("botoxSign")) continue;
         try {
           const module = runtime.i(id);
@@ -108,6 +116,7 @@ function signedProbeScript() {
       if (!signer && chunks && typeof chunks.push === "function") {
         const runtimeId = 990000001;
         const source = document.createElement("script");
+        source.src = new URL("/_next/static/chunks/seed-hex-catch-probe.js", location.href).href;
         const receiveRuntime = (runtime) => findSigner(runtime, "injected-runtime");
         try { chunks.push([source, runtimeId, receiveRuntime]); } catch (_) {}
         if (!signer) {
@@ -168,6 +177,8 @@ function runtimeCaptureScript() {
       globalThis.__seedHexTurbopackRuntime = runtime;
       const runtimes = globalThis.__seedHexTurbopackRuntimes ||= [];
       if (!runtimes.includes(runtime)) runtimes.push(runtime);
+      rememberModule(runtime.e, 'exports');
+      rememberModule(runtime.m, 'module');
       for (const [collectionName, collection] of [['cache', runtime.c], ['module-cache', runtime.cache]]) {
         const entries = collection instanceof Map ? collection.entries() : Object.entries(collection || {});
         for (const [id, module] of entries) rememberModule(module, collectionName + ':' + String(id));
@@ -190,12 +201,17 @@ function runtimeCaptureScript() {
       if (!value || value.__seedHexWrapped || typeof value.push !== 'function') return;
       const originalPush = value.push.bind(value);
       value.push = function (entry) {
-        if (Array.isArray(entry) && typeof entry[2] === 'function') {
-          const callback = entry[2];
-          entry[2] = function (runtime) {
-            rememberRuntime(runtime);
-            return callback.apply(this, arguments);
-          };
+        if (Array.isArray(entry)) {
+          for (let index = 2; index < entry.length; index += 1) {
+            if (typeof entry[index] !== 'function') continue;
+            const callback = entry[index];
+            entry[index] = function (runtime) {
+              rememberRuntime(runtime);
+              try { return callback.apply(this, arguments); }
+              finally { rememberRuntime(runtime); }
+            };
+            entry[index].__seedHexOriginalFactory = callback;
+          }
         }
         return originalPush(entry);
       };
@@ -330,7 +346,7 @@ export class SVGMaterialCollector {
         proxyURL: this.proxyURL,
         timeoutMs: this.flareSolverrTimeoutMs,
       });
-      browser = await chromium.launch({
+      browser = await launchCaptureBrowser({
         headless: this.headless,
         proxy: parseProxy(this.proxyURL),
         ...(this.executablePath ? { executablePath: this.executablePath } : {}),
