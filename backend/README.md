@@ -38,6 +38,8 @@ go run ./cmd/grok2api --config /path/to/config.yaml --listen 0.0.0.0:8000
 
 PostgreSQL DSN 也可通过非空的 `GROK2API_DATABASE_URL` 注入；它的优先级高于 YAML，并会自动将数据库驱动切换为 `postgres`。空值不覆盖 YAML，程序不会隐式读取通用的 `DATABASE_URL`。
 
+SQLite → PostgreSQL 停机迁移时，先停旧服务、保留其持久卷，再以单副本 PostgreSQL 配置启动并临时设置 `GROK2API_MIGRATE_SQLITE_TO_POSTGRES=true`。完成后关闭开关；支持一次性任务的平台可执行 `grok2api migrate-sqlite-to-postgres --config /app/config.yaml`。目标库须无业务数据，原加密密钥和 JWT secret 必须保留。
+
 | 场景 | 数据库 | 运行态存储 |
 | --- | --- | --- |
 | 本地开发 / 单实例 | SQLite | Memory |

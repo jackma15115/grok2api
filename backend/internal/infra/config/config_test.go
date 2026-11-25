@@ -39,6 +39,69 @@ database:
 	}
 }
 
+func TestLoadSQLiteToPostgresMigrationFlagAndSourcePath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`database:
+  driver: postgres
+  sqlite:
+    path: "./data/backend.db"
+  postgres:
+    dsn: "postgres://user:password@localhost/grok2api"
+secrets:
+  jwtSecret: "12345678901234567890123456789012"
+  credentialEncryptionKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(MigrateSQLiteToPostgresEnv, "true")
+	if err := os.Unsetenv(DatabaseURLEnv); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Database.MigrateSQLiteToPostgres {
+		t.Fatal("migration environment flag was not applied")
+	}
+	if want := filepath.Join(filepath.Dir(path), "data", "backend.db"); cfg.Database.SQLite.Path != want {
+		t.Fatalf("SQLite migration source path = %q, want %q", cfg.Database.SQLite.Path, want)
+	}
+}
+
+func TestLoadRejectsInvalidSQLiteToPostgresMigrationFlag(t *testing.T) {
+	t.Setenv(MigrateSQLiteToPostgresEnv, "sometimes")
+	_, err := Load("")
+	if err == nil || !strings.Contains(err.Error(), "布尔值 true 或 false") {
+		t.Fatalf("Load error = %v", err)
+	}
+}
+
+func TestLoadRequiresPostgresWhenSQLiteMigrationFlagIsEnabled(t *testing.T) {
+	t.Setenv(MigrateSQLiteToPostgresEnv, "true")
+	if err := os.Unsetenv(DatabaseURLEnv); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load("")
+	if err == nil || !strings.Contains(err.Error(), "仅适用于 database.driver=postgres") {
+		t.Fatalf("Load error = %v", err)
+	}
+}
+
+func TestValidateRequiresSingleReplicaForSQLiteMigration(t *testing.T) {
+	value := defaultConfig()
+	value.Database.Driver = "postgres"
+	value.Database.Postgres.DSN = "postgres://user:password@127.0.0.1:5432/grok2api"
+	value.Database.SQLite.Path = "./data/backend.db"
+	value.Database.MigrateSQLiteToPostgres = true
+	value.Deployment = DeploymentConfig{Replicas: 2, InstanceID: "replica-a", ClusterID: "migration", SharedMedia: true}
+	value.RuntimeStore.Driver = "redis"
+	value.RuntimeStore.Redis.Address = "127.0.0.1:6379"
+	if err := value.Validate(); err == nil || !strings.Contains(err.Error(), "必须先以单实例模式运行") {
+		t.Fatalf("Validate error = %v", err)
+	}
+}
+
 func TestLoadEmptyDatabaseURLKeepsYAML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	const yamlDSN = "postgres://yaml:secret@postgres.internal:5432/grok2api"

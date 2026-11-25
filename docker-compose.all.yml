@@ -13,6 +13,10 @@ services:
       - "${GROK2API_PORT:-8000}:8000"
     environment:
       TZ: "${TZ:-Asia/Shanghai}"
+      # 非空时覆盖 config.yaml 的 PostgreSQL DSN，并自动启用 postgres。
+      GROK2API_DATABASE_URL: "${GROK2API_DATABASE_URL:-}"
+      # 仅 SQLite → PostgreSQL 切换时临时设为 true。
+      GROK2API_MIGRATE_SQLITE_TO_POSTGRES: "${GROK2API_MIGRATE_SQLITE_TO_POSTGRES:-false}"
       GROK2API_MEMORY_SOFT_LIMIT: "${GROK2API_MEMORY_SOFT_LIMIT:-}"
     volumes:
       - "${GROK2API_CONFIG:-./config.yaml}:/run/grok2api/config.yaml:ro"

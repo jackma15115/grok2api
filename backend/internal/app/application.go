@@ -90,6 +90,14 @@ type Application struct {
 
 // New 完成数据库、Provider、应用服务和 HTTP 路由装配。
 func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Application, error) {
+	if cfg.Database.MigrateSQLiteToPostgres {
+		if cfg.Database.Driver != "postgres" {
+			return nil, fmt.Errorf("%s 仅适用于 database.driver=postgres", config.MigrateSQLiteToPostgresEnv)
+		}
+		if err := relational.MigrateSQLiteToPostgres(ctx, cfg.Database.SQLite.Path, cfg.Database.Postgres.DSN, cfg.Database.Postgres.MaxOpenConns, cfg.Database.Postgres.MaxIdleConns); err != nil {
+			return nil, fmt.Errorf("迁移 SQLite 数据到 PostgreSQL: %w", err)
+		}
+	}
 	qualityGuardDirectory := strings.TrimSpace(os.Getenv("GROK2API_QUALITY_GUARD_DIR"))
 	qualityGuardPath := func(name string) string {
 		if qualityGuardDirectory == "" {

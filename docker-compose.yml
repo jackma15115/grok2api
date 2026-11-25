@@ -10,6 +10,8 @@ services:
       TZ: "${TZ:-Asia/Shanghai}"
       # 非空时覆盖 config.yaml 的 PostgreSQL DSN，并自动启用 postgres。
       GROK2API_DATABASE_URL: "${GROK2API_DATABASE_URL:-}"
+      # 仅 SQLite → PostgreSQL 切换时临时设为 true；迁移成功、服务健康后恢复 false。
+      GROK2API_MIGRATE_SQLITE_TO_POSTGRES: "${GROK2API_MIGRATE_SQLITE_TO_POSTGRES:-false}"
       # 正整数 + 单位，例如 768MiB 或 1GiB；留空时按容器内存上限的 80% 自动设置。
       GROK2API_MEMORY_SOFT_LIMIT: "${GROK2API_MEMORY_SOFT_LIMIT:-}"
       GROK2API_QUALITY_GUARD_DIR: /var/lib/grok2api-quality-guard

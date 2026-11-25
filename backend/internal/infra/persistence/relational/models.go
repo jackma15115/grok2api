@@ -591,3 +591,13 @@ type egressOperationsConfigModel struct {
 }
 
 func (egressOperationsConfigModel) TableName() string { return "egress_operations_config" }
+
+// sqlitePostgresMigrationModel records the completed, one-time SQLite import
+// so a persistent startup flag remains safe across PaaS restarts.
+type sqlitePostgresMigrationModel struct {
+	Version     string    `gorm:"size:64;primaryKey"`
+	SourcePath  string    `gorm:"type:text;not null"`
+	CompletedAt time.Time `gorm:"not null"`
+}
+
+func (sqlitePostgresMigrationModel) TableName() string { return "grok2api_migration_state" }

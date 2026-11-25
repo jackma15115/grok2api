@@ -22,6 +22,7 @@ import (
 
 const (
 	DatabaseURLEnv                = "GROK2API_DATABASE_URL"
+	MigrateSQLiteToPostgresEnv    = "GROK2API_MIGRATE_SQLITE_TO_POSTGRES"
 	StatsigModeDisabled           = "disabled"
 	StatsigModeManual             = "manual"
 	StatsigModeLocal              = "local"
@@ -104,9 +105,10 @@ func (c FrontendConfig) EffectivePublicAPIBaseURL() string {
 }
 
 type DatabaseConfig struct {
-	Driver   string                 `yaml:"driver"`
-	SQLite   SQLiteDatabaseConfig   `yaml:"sqlite"`
-	Postgres PostgresDatabaseConfig `yaml:"postgres"`
+	Driver                  string                 `yaml:"driver"`
+	SQLite                  SQLiteDatabaseConfig   `yaml:"sqlite"`
+	Postgres                PostgresDatabaseConfig `yaml:"postgres"`
+	MigrateSQLiteToPostgres bool                   `yaml:"-"`
 }
 
 type SQLiteDatabaseConfig struct {
@@ -411,6 +413,13 @@ func Load(path string) (Config, error) {
 // overrides after YAML and before CLI overrides. Empty values are ignored so
 // Compose can pass an optional variable without changing existing deployments.
 func applyEnvironmentOverrides(cfg *Config) error {
+	if value := strings.TrimSpace(os.Getenv(MigrateSQLiteToPostgresEnv)); value != "" {
+		if !strings.EqualFold(value, "true") && !strings.EqualFold(value, "false") {
+			return fmt.Errorf("%s 必须是布尔值 true 或 false", MigrateSQLiteToPostgresEnv)
+		}
+		enabled := strings.EqualFold(value, "true")
+		cfg.Database.MigrateSQLiteToPostgres = enabled
+	}
 	value := strings.TrimSpace(os.Getenv(DatabaseURLEnv))
 	if value == "" {
 		return nil
@@ -445,11 +454,9 @@ func resolveRelativePaths(cfg *Config, configPath string) error {
 		return fmt.Errorf("解析配置文件路径: %w", err)
 	}
 	baseDir := filepath.Dir(absoluteConfigPath)
-	if cfg.Database.Driver == "sqlite" {
-		path := strings.TrimSpace(cfg.Database.SQLite.Path)
-		if path != "" && !filepath.IsAbs(path) {
-			cfg.Database.SQLite.Path = filepath.Clean(filepath.Join(baseDir, path))
-		}
+	path := strings.TrimSpace(cfg.Database.SQLite.Path)
+	if path != "" && !filepath.IsAbs(path) {
+		cfg.Database.SQLite.Path = filepath.Clean(filepath.Join(baseDir, path))
 	}
 	mediaPath := strings.TrimSpace(cfg.Media.Local.Path)
 	if mediaPath != "" && !filepath.IsAbs(mediaPath) {
@@ -527,6 +534,14 @@ func (c Config) Validate() error {
 	default:
 		return errors.New("database.driver 必须是 sqlite 或 postgres")
 	}
+	if c.Database.MigrateSQLiteToPostgres {
+		if c.Database.Driver != "postgres" {
+			return fmt.Errorf("%s 仅适用于 database.driver=postgres", MigrateSQLiteToPostgresEnv)
+		}
+		if strings.TrimSpace(c.Database.SQLite.Path) == "" {
+			return errors.New("SQLite → PostgreSQL 迁移需要 database.sqlite.path 指向现有数据库文件")
+		}
+	}
 	switch c.RuntimeStore.Driver {
 	case "memory":
 	case "redis":
@@ -544,6 +559,9 @@ func (c Config) Validate() error {
 	}
 	if c.Deployment.Replicas < 1 || c.Deployment.Replicas > maxDeploymentReplicas {
 		return fmt.Errorf("deployment.replicas 必须在 1 到 %d 之间", maxDeploymentReplicas)
+	}
+	if c.Database.MigrateSQLiteToPostgres && c.Deployment.Replicas != 1 {
+		return errors.New("SQLite → PostgreSQL 迁移必须先以单实例模式运行")
 	}
 	if c.Deployment.Replicas > 1 {
 		if c.Database.Driver != "postgres" {

@@ -12,6 +12,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/app"
 	"github.com/chenyme/grok2api/backend/internal/infra/config"
 	"github.com/chenyme/grok2api/backend/internal/infra/observability"
+	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
 	"github.com/chenyme/grok2api/backend/internal/infra/resourcelimit"
 )
 
@@ -24,6 +25,18 @@ func Run(args []string) error {
 	cfg, err := config.Load(options.configPath)
 	if err != nil {
 		return err
+	}
+	if options.command == "migrate-sqlite-to-postgres" {
+		if cfg.Database.Driver != "postgres" {
+			return fmt.Errorf("SQLite → PostgreSQL 迁移需要 database.driver=postgres 或配置 %s", config.DatabaseURLEnv)
+		}
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		if err := relational.MigrateSQLiteToPostgres(ctx, cfg.Database.SQLite.Path, cfg.Database.Postgres.DSN, cfg.Database.Postgres.MaxOpenConns, cfg.Database.Postgres.MaxIdleConns); err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stdout, "SQLite → PostgreSQL 迁移完成")
+		return nil
 	}
 	if options.listen != "" {
 		cfg.Server.Listen = options.listen
@@ -55,12 +68,17 @@ func Run(args []string) error {
 }
 
 type runOptions struct {
+	command    string
 	configPath string
 	listen     string
 }
 
 func parseOptions(args []string) (runOptions, error) {
-	options := runOptions{configPath: defaultConfigPath()}
+	options := runOptions{command: "serve", configPath: defaultConfigPath()}
+	if len(args) > 0 && args[0] == "migrate-sqlite-to-postgres" {
+		options.command = args[0]
+		args = args[1:]
+	}
 	for index := 0; index < len(args); index++ {
 		switch args[index] {
 		case "--config":

@@ -499,7 +499,24 @@ PostgreSQL 凭据可以通过环境变量注入，无需写入 `config.yaml`：
 GROK2API_DATABASE_URL='postgresql://user:password@host:5432/grok2api?sslmode=require' docker compose up -d
 ```
 
-非空的 `GROK2API_DATABASE_URL` 会覆盖 `database.postgres.dsn` 并自动选择 `postgres`；空值不会覆盖 YAML。支持 `postgres://` 和 `postgresql://`，SQLAlchemy 的 `postgresql+asyncpg://` 会返回格式迁移提示。程序不会隐式读取通用的 `DATABASE_URL`；平台只提供该变量时，可在部署清单中显式映射为 `GROK2API_DATABASE_URL: "${DATABASE_URL}"`。数据库配置优先级为：内置默认值 < `config.yaml` < `GROK2API_DATABASE_URL`。当前 CLI 没有数据库覆盖参数。
+非空的 `GROK2API_DATABASE_URL` 会覆盖 `database.postgres.dsn` 并自动选择 `postgres`；空值不会覆盖 YAML。支持 `postgres://` 和 `postgresql://`，SQLAlchemy 的 `postgresql+asyncpg://` 会返回格式迁移提示。程序不会隐式读取通用的 `DATABASE_URL`；平台只提供该变量时，可在部署清单中显式映射为 `GROK2API_DATABASE_URL: "${DATABASE_URL}"`。数据库配置优先级为：内置默认值 < `config.yaml` < `GROK2API_DATABASE_URL`。CLI 没有通用数据库覆盖参数。
+
+#### 将现有 SQLite 数据迁到 PostgreSQL
+
+迁移停机期间运行：先停止旧服务，再让单个新实例挂载**原来的持久卷**。将配置中的 `database.sqlite.path` 保持为旧 SQLite 文件路径，将 `database.driver` 设为 `postgres`；通过 secret 配置目标 `GROK2API_DATABASE_URL`，临时设 `GROK2API_MIGRATE_SQLITE_TO_POSTGRES=true`。新实例会在启动 HTTP 服务前尝试迁移，成功后继续启动。PaaS 应将这些变量配置到同一个服务，并暂时关闭并发副本和滚动并行启动。
+
+```yaml
+database:
+  driver: postgres
+  sqlite:
+    path: /app/data/backend.db # 指向旧版本持久卷上的实际文件
+  postgres:
+    dsn: "" # PaaS 将 GROK2API_DATABASE_URL 注入 secret
+```
+
+Compose 通过环境变量临时打开迁移开关；要让容器看到原数据库，**保留旧的数据卷挂载**。迁移开始前先将服务缩到 0，再以单副本挂载同一卷启动；确认健康检查通过后，移除 `GROK2API_MIGRATE_SQLITE_TO_POSTGRES`（或设为 `false`），之后再按需要扩容。支持一次性任务的平台也可以运行 `grok2api migrate-sqlite-to-postgres --config /app/config.yaml`，完成后再启动应用；它和启动前开关使用相同迁移逻辑。
+
+目标 PostgreSQL 必须是空的业务库；程序拒绝向已有业务数据的表合并。导入和完成标记在同一个 PostgreSQL 事务提交，失败时不会保留半份导入；完成后同一路径重复启动会识别标记并跳过。迁移不删除旧 SQLite 文件，也不复制数据库之外的媒体文件。保留 `secrets.credentialEncryptionKey` 和 `secrets.jwtSecret`；媒体目录仍指向原持久卷（若更换卷，则需单独复制目录）。若迁移后启用多副本，按下文要求同时配置 PostgreSQL、Redis 和共享媒体目录。
 
 ### 内存软限制
 

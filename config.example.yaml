@@ -53,7 +53,7 @@ frontend:
   staticPath: "./frontend/dist"
 
 database:
-  # [按需修改] 单实例使用 sqlite；多实例改为 postgres。
+  # [按需修改] 单实例使用 sqlite；多实例改为 postgres。仅迁移期间同时填写目标 PostgreSQL 和旧 SQLite 来源路径。
   driver: sqlite # sqlite | postgres
   sqlite:
     # [通常不要修改] 相对路径以本配置文件所在目录为基准。

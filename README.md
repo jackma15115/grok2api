@@ -542,7 +542,24 @@ PostgreSQL credentials can be injected without storing them in `config.yaml`:
 GROK2API_DATABASE_URL='postgresql://user:password@host:5432/grok2api?sslmode=require' docker compose up -d
 ```
 
-A non-empty `GROK2API_DATABASE_URL` overrides `database.postgres.dsn` and automatically selects the `postgres` driver. An empty value is ignored. Supported URL schemes are `postgres://` and `postgresql://`; SQLAlchemy's `postgresql+asyncpg://` form is rejected with a migration hint. The application does not implicitly read the generic `DATABASE_URL`; platforms that provide it can map it explicitly with `GROK2API_DATABASE_URL: "${DATABASE_URL}"`. Database configuration precedence is built-in defaults, `config.yaml`, then `GROK2API_DATABASE_URL`. The current CLI has no database override.
+A non-empty `GROK2API_DATABASE_URL` overrides `database.postgres.dsn` and automatically selects the `postgres` driver. An empty value is ignored. Supported URL schemes are `postgres://` and `postgresql://`; SQLAlchemy's `postgresql+asyncpg://` form is rejected with a migration hint. The application does not implicitly read the generic `DATABASE_URL`; platforms that provide it can map it explicitly with `GROK2API_DATABASE_URL: "${DATABASE_URL}"`. Database configuration precedence is built-in defaults, `config.yaml`, then `GROK2API_DATABASE_URL`. The CLI has no general database override flag.
+
+#### Migrate Existing SQLite Data to PostgreSQL
+
+For a planned downtime cutover, stop the old service first, then run one new instance with the **existing persistent volume** mounted. Set `database.driver: postgres`, retain `database.sqlite.path` pointing to the old SQLite file, inject the target DSN as the `GROK2API_DATABASE_URL` secret, and temporarily set `GROK2API_MIGRATE_SQLITE_TO_POSTGRES=true`. The instance imports before serving HTTP requests. On a PaaS, set the same service environment variables and disable parallel replicas and rolling-overlap startup for this cutover.
+
+```yaml
+database:
+  driver: postgres
+  sqlite:
+    path: /app/data/backend.db # Existing file on the persistent volume
+  postgres:
+    dsn: "" # Inject GROK2API_DATABASE_URL as a PaaS secret
+```
+
+For Docker Compose, set the temporary migration variable and keep the old data-volume mount. Stop the service to zero replicas before starting one instance against the same volume. After its health check passes, remove `GROK2API_MIGRATE_SQLITE_TO_POSTGRES` (or set it to `false`) before increasing replicas. Platforms that support one-off jobs can instead run `grok2api migrate-sqlite-to-postgres --config /app/config.yaml` before starting the service; it calls the same migration path.
+
+The target PostgreSQL database must have no application data; migration rejects populated tables instead of merging them. The import and completion marker commit in one PostgreSQL transaction, so a failed import leaves no partial rows. A successful migration to the same source path is skipped on later starts. The old SQLite file is preserved. Media files are not in the database: retain their existing volume or copy the media directory separately. Keep `secrets.credentialEncryptionKey` and `secrets.jwtSecret` unchanged. Multi-replica service operation additionally requires the PostgreSQL, Redis, and shared-media configuration described below.
 
 ### Memory soft limit
 

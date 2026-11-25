@@ -34,3 +34,21 @@ func TestParseOptionsSupportsContainerListenOverride(t *testing.T) {
 		t.Fatal("missing --listen value was accepted")
 	}
 }
+
+func TestParseOptionsRecognizesSQLiteMigrationCommand(t *testing.T) {
+	options, err := parseOptions([]string{"migrate-sqlite-to-postgres", "--config", "/app/config.yaml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.command != "migrate-sqlite-to-postgres" || options.configPath != "/app/config.yaml" {
+		t.Fatalf("migration options = %#v", options)
+	}
+
+	serve, err := parseOptions(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serve.command != "serve" {
+		t.Fatalf("default command = %q", serve.command)
+	}
+}
